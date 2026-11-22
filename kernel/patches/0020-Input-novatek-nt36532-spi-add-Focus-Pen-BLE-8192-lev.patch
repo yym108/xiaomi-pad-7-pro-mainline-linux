@@ -1,0 +1,197 @@
+From 7e6dcdd66d828b9c4f20f4fb2293fd202287a5a4 Mon Sep 17 00:00:00 2001
+From: yym <183073514+yym108@users.noreply.github.com>
+Date: Sun, 22 Nov 2026 11:46:51 +0800
+Subject: [PATCH 20/28] Input: novatek-nt36532-spi - add Focus Pen BLE
+ 8192-level pressure & button bridge
+
+---
+ .../input/touchscreen/novatek-nt36532-spi.c   | 123 ++++++++++++++----
+ 1 file changed, 100 insertions(+), 23 deletions(-)
+
+diff --git a/drivers/input/touchscreen/novatek-nt36532-spi.c b/drivers/input/touchscreen/novatek-nt36532-spi.c
+index dd13d0713..c75a0918f 100644
+--- a/drivers/input/touchscreen/novatek-nt36532-spi.c
++++ b/drivers/input/touchscreen/novatek-nt36532-spi.c
+@@ -9,6 +9,7 @@
+ #include <linux/input.h>
+ #include <linux/input/mt.h>
+ #include <linux/interrupt.h>
++#include <linux/jiffies.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
+ #include <linux/spi/spi.h>
+@@ -54,7 +55,8 @@
+ #define NVT_PEN_MAT0_COLS		12
+ #define NVT_PEN_MAT1_ROWS		8
+ #define NVT_PEN_MAT1_COLS		60
+-#define NVT_PEN_PRESSURE_MAX		4095
++#define NVT_PEN_PRESSURE_MAX		8191
++#define NVT_PEN_BLE_TIMEOUT_MS		250
+ #define NVT_PEN_PEAK_MIN		25
+ #define NVT_PEN_TOUCH_DOWN_MIN		120
+ #define NVT_PEN_TOUCH_UP_MIN		85
+@@ -87,6 +89,10 @@ struct nvt_nt36532_ts {
+ 	bool pen_active;
+ 	bool pen_touching;
+ 	int pen_miss_cnt;
++	unsigned long pen_ble_jiffies;
++	u16 pen_ble_pressure;
++	u8 pen_ble_buttons;
++	bool pen_ble_valid;
+ 	u16 max_x;
+ 	u16 max_y;
+ };
+@@ -329,6 +335,9 @@ static void nvt_release_pen(struct nvt_nt36532_ts *ts)
+ 
+ 	input_report_abs(ts->pen_input, ABS_PRESSURE, 0);
+ 	input_report_abs(ts->pen_input, ABS_DISTANCE, 0);
++	input_report_key(ts->pen_input, BTN_STYLUS, 0);
++	input_report_key(ts->pen_input, BTN_STYLUS2, 0);
++	input_report_key(ts->pen_input, BTN_STYLUS3, 0);
+ 	input_report_key(ts->pen_input, BTN_TOUCH, 0);
+ 	input_report_key(ts->pen_input, BTN_TOOL_PEN, 0);
+ 	input_sync(ts->pen_input);
+@@ -427,32 +436,50 @@ static void nvt_process_stylus_frame(struct nvt_nt36532_ts *ts)
+ 	x = clamp_val(x, 0, ts->max_x - 1);
+ 
+ 	/*
+-	 * Derive touch vs hover with hysteresis from tip signal amplitude, and
+-	 * map contact amplitude smoothly into 0..4095 pressure range.
++	 * Prefer real 8192-level mechanical pressure and side buttons streamed
++	 * over Focus Pen BLE GATT (handle 0x002e / 0x002a) via pen_ble_state;
++	 * fall back to tip signal amplitude heuristic when BLE stream is stale.
+ 	 */
+-	if (ts->pen_touching) {
+-		if (max(peak0, peak1) < NVT_PEN_TOUCH_UP_MIN)
+-			ts->pen_touching = false;
+-	} else {
+-		if (max(peak0, peak1) >= NVT_PEN_TOUCH_DOWN_MIN)
+-			ts->pen_touching = true;
+-	}
++	{
++		bool ble_fresh = READ_ONCE(ts->pen_ble_valid) &&
++				 time_before(jiffies,
++					     READ_ONCE(ts->pen_ble_jiffies) +
++					     msecs_to_jiffies(NVT_PEN_BLE_TIMEOUT_MS));
++		u8 buttons = 0;
++
++		if (ble_fresh) {
++			pressure = READ_ONCE(ts->pen_ble_pressure);
++			buttons = READ_ONCE(ts->pen_ble_buttons);
++			ts->pen_touching = (pressure > 0);
++		} else {
++			if (ts->pen_touching) {
++				if (max(peak0, peak1) < NVT_PEN_TOUCH_UP_MIN)
++					ts->pen_touching = false;
++			} else {
++				if (max(peak0, peak1) >= NVT_PEN_TOUCH_DOWN_MIN)
++					ts->pen_touching = true;
++			}
+ 
+-	if (ts->pen_touching) {
+-		int amp = max(peak0, peak1) - NVT_PEN_TOUCH_UP_MIN;
++			if (ts->pen_touching) {
++				int amp = max(peak0, peak1) - NVT_PEN_TOUCH_UP_MIN;
+ 
+-		pressure = clamp_val(amp * 14, 256, NVT_PEN_PRESSURE_MAX);
+-	} else {
+-		pressure = 0;
+-	}
++				pressure = clamp_val(amp * 28, 512, NVT_PEN_PRESSURE_MAX);
++			} else {
++				pressure = 0;
++			}
++		}
+ 
+-	input_report_key(ts->pen_input, BTN_TOOL_PEN, 1);
+-	input_report_key(ts->pen_input, BTN_TOUCH, ts->pen_touching);
+-	input_report_abs(ts->pen_input, ABS_X, x);
+-	input_report_abs(ts->pen_input, ABS_Y, y);
+-	input_report_abs(ts->pen_input, ABS_PRESSURE, pressure);
+-	input_report_abs(ts->pen_input, ABS_DISTANCE, ts->pen_touching ? 0 : 1);
+-	input_sync(ts->pen_input);
++		input_report_key(ts->pen_input, BTN_TOOL_PEN, 1);
++		input_report_key(ts->pen_input, BTN_TOUCH, ts->pen_touching);
++		input_report_key(ts->pen_input, BTN_STYLUS, !!(buttons & BIT(0)));
++		input_report_key(ts->pen_input, BTN_STYLUS2, !!(buttons & BIT(1)));
++		input_report_key(ts->pen_input, BTN_STYLUS3, !!(buttons & BIT(2)));
++		input_report_abs(ts->pen_input, ABS_X, x);
++		input_report_abs(ts->pen_input, ABS_Y, y);
++		input_report_abs(ts->pen_input, ABS_PRESSURE, pressure);
++		input_report_abs(ts->pen_input, ABS_DISTANCE, ts->pen_touching ? 0 : 1);
++		input_sync(ts->pen_input);
++	}
+ 	ts->pen_active = true;
+ }
+ 
+@@ -735,6 +762,9 @@ static int nvt_nt36532_probe(struct spi_device *spi)
+ 	__set_bit(EV_ABS, ts->pen_input->evbit);
+ 	__set_bit(BTN_TOOL_PEN, ts->pen_input->keybit);
+ 	__set_bit(BTN_TOUCH, ts->pen_input->keybit);
++	__set_bit(BTN_STYLUS, ts->pen_input->keybit);
++	__set_bit(BTN_STYLUS2, ts->pen_input->keybit);
++	__set_bit(BTN_STYLUS3, ts->pen_input->keybit);
+ 	__set_bit(INPUT_PROP_DIRECT, ts->pen_input->propbit);
+ 
+ 	input_set_abs_params(ts->pen_input, ABS_X, 0, ts->max_x - 1, 0, 0);
+@@ -766,10 +796,57 @@ static const struct spi_device_id nvt_nt36532_spi_id[] = {
+ };
+ MODULE_DEVICE_TABLE(spi, nvt_nt36532_spi_id);
+ 
++static ssize_t pen_ble_state_show(struct device *dev,
++				  struct device_attribute *attr, char *buf)
++{
++	struct nvt_nt36532_ts *ts = dev_get_drvdata(dev);
++	bool fresh = READ_ONCE(ts->pen_ble_valid) &&
++		     time_before(jiffies,
++				 READ_ONCE(ts->pen_ble_jiffies) +
++				 msecs_to_jiffies(NVT_PEN_BLE_TIMEOUT_MS));
++
++	return sysfs_emit(buf, "%u %u %d\n",
++			  READ_ONCE(ts->pen_ble_pressure),
++			  READ_ONCE(ts->pen_ble_buttons),
++			  fresh ? 1 : 0);
++}
++
++static ssize_t pen_ble_state_store(struct device *dev,
++				   struct device_attribute *attr,
++				   const char *buf, size_t count)
++{
++	struct nvt_nt36532_ts *ts = dev_get_drvdata(dev);
++	unsigned int pressure = 0, buttons = 0;
++	int n;
++
++	n = sscanf(buf, "%u %u", &pressure, &buttons);
++	if (n < 1)
++		return -EINVAL;
++
++	if (pressure > NVT_PEN_PRESSURE_MAX)
++		pressure = NVT_PEN_PRESSURE_MAX;
++	buttons &= 0x7;
++
++	WRITE_ONCE(ts->pen_ble_pressure, pressure);
++	WRITE_ONCE(ts->pen_ble_buttons, buttons);
++	WRITE_ONCE(ts->pen_ble_jiffies, jiffies);
++	WRITE_ONCE(ts->pen_ble_valid, true);
++
++	return count;
++}
++static DEVICE_ATTR_RW(pen_ble_state);
++
++static struct attribute *nvt_nt36532_attrs[] = {
++	&dev_attr_pen_ble_state.attr,
++	NULL
++};
++ATTRIBUTE_GROUPS(nvt_nt36532);
++
+ static struct spi_driver nvt_nt36532_driver = {
+ 	.driver = {
+ 		.name = "novatek-nt36532-spi",
+ 		.of_match_table = nvt_nt36532_of_match,
++		.dev_groups = nvt_nt36532_groups,
+ 	},
+ 	.id_table = nvt_nt36532_spi_id,
+ 	.probe = nvt_nt36532_probe,
+-- 
+2.54.0 (Apple Git-157)
+

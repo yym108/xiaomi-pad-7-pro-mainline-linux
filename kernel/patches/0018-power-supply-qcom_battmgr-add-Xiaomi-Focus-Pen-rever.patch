@@ -1,0 +1,278 @@
+From a89764f75cb6e4e90bacc58de04adec2f8ea6e7b Mon Sep 17 00:00:00 2001
+From: yym <183073514+yym108@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 23:41:07 +0800
+Subject: [PATCH 18/28] power: supply: qcom_battmgr: add Xiaomi Focus Pen
+ reverse wireless TX & fix WN8030 LDO22 soft-start
+
+1. Add Xiaomi OEM PMIC_GLINK properties (opcodes 0x50 GET / 0x51 SET) to
+   qcom_battmgr.c, exposing sysfs controls under
+   /sys/bus/auxiliary/devices/pmic_glink.power-supply.0/:
+   pen_soc, tx_vout, tx_iout, reverse_chg_state, reverse_chg_mode,
+   pen_hall3, pen_hall4, pen_place_err.
+   Hardware-verified on Xiaomi Pad 7 Pro: reverse_chg_mode=1 starts Qi TX
+   (tx_vout=6063 mV, tx_iout=162 mA), reads pen_soc=99..100, and tracks
+   magnetic dock attach/detach via pen_hall3 (0=attached, 1=detached).
+2. Fix PMIC OCP hard reset (pdreason=0x2) when enabling pmxr2230_l22 (3.3V)
+   on warm reboot with magnetic keyboard attached: extend vreg_l22b_3p3
+   range to 2.704V..3.304V and soft-start dvdd in steps (2.70V -> 3.00V ->
+   3.30V) in hid-nanosic-wn8030.c while keeping reset/sleep asserted before
+   power-on. Confirmed auto-loading MCU_Upgrade.bin and enumerating Xiaomi
+   Keyboard + Touchpad cleanly on warm reboot.
+---
+ .../boot/dts/qcom/sm8635-xiaomi-muyu.dts      |   2 +-
+ drivers/hid/hid-nanosic-wn8030.c              |  32 ++++-
+ drivers/power/supply/qcom_battmgr.c           | 132 +++++++++++++++++-
+ 3 files changed, 158 insertions(+), 8 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts b/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
+index 43ce6ef5b..c61051366 100644
+--- a/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
++++ b/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
+@@ -1287,7 +1287,7 @@ vreg_l17b_3p0: ldo17 {
+ 
+ 				vreg_l22b_3p3: ldo22 {
+ 					regulator-name = "vreg_l22b_3p3";
+-					regulator-min-microvolt = <3296000>;
++					regulator-min-microvolt = <2704000>;
+ 					regulator-max-microvolt = <3304000>;
+ 					regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+ 				};
+diff --git a/drivers/hid/hid-nanosic-wn8030.c b/drivers/hid/hid-nanosic-wn8030.c
+index f8c3038d3..6deb6222b 100644
+--- a/drivers/hid/hid-nanosic-wn8030.c
++++ b/drivers/hid/hid-nanosic-wn8030.c
+@@ -806,16 +806,36 @@ static int nanosic_wn8030_power_on(struct nanosic_wn8030 *nanosic)
+ {
+ 	int ret;
+ 
+-	ret = regulator_bulk_enable(ARRAY_SIZE(nanosic_wn8030_supply_names),
+-				    nanosic->supplies);
++	gpiod_set_value_cansleep(nanosic->sleep_gpio, 1);
++	gpiod_set_value_cansleep(nanosic->reset_gpio, 1);
++	msleep(20);
++
++	/* Enable 1.8V I/O rail first */
++	ret = regulator_enable(nanosic->supplies[0].consumer);
++	if (ret) {
++		dev_err(nanosic->dev, "failed to enable vddio: %d\n", ret);
++		return ret;
++	}
++	msleep(10);
++
++	/* Soft-start 3.3V dvdd (ldo22) from 2.70V -> 3.00V -> 3.30V to avoid PMIC OCP */
++	regulator_set_voltage(nanosic->supplies[1].consumer, 2704000, 2704000);
++	ret = regulator_enable(nanosic->supplies[1].consumer);
+ 	if (ret) {
+-		dev_err(nanosic->dev, "failed to enable regulators\n");
++		dev_err(nanosic->dev, "failed to enable dvdd: %d\n", ret);
++		regulator_disable(nanosic->supplies[0].consumer);
+ 		return ret;
+ 	}
++	msleep(15);
++	regulator_set_voltage(nanosic->supplies[1].consumer, 3000000, 3000000);
++	msleep(15);
++	regulator_set_voltage(nanosic->supplies[1].consumer, 3296000, 3304000);
++	msleep(20);
+ 
+ 	gpiod_set_value_cansleep(nanosic->reset_gpio, 0);
+-	msleep(20); /* On Pad 6S Pro we only wait for WN8030 bootrom start */
++	msleep(25); /* Wait for WN8030 bootrom start after reset release */
+ 	gpiod_set_value_cansleep(nanosic->sleep_gpio, 0);
++	msleep(20);
+ 
+ 	return 0;
+ }
+@@ -980,7 +1000,7 @@ static int nanosic_wn8030_probe(struct i2c_client *client)
+ 	nanosic->dev = &client->dev;
+ 	nanosic->client = client;
+ 
+-	nanosic->reset_gpio = devm_gpiod_get(nanosic->dev, "reset", GPIOD_OUT_LOW);
++	nanosic->reset_gpio = devm_gpiod_get(nanosic->dev, "reset", GPIOD_OUT_HIGH);
+ 	if (IS_ERR(nanosic->reset_gpio))
+ 		return dev_err_probe(nanosic->dev, PTR_ERR(nanosic->reset_gpio),
+ 				     "failed to get reset gpio\n");
+@@ -990,7 +1010,7 @@ static int nanosic_wn8030_probe(struct i2c_client *client)
+ 		return dev_err_probe(nanosic->dev, PTR_ERR(nanosic->status_gpio),
+ 				     "failed to get status gpio\n");
+ 
+-	nanosic->sleep_gpio = devm_gpiod_get(nanosic->dev, "sleep", GPIOD_OUT_LOW);
++	nanosic->sleep_gpio = devm_gpiod_get(nanosic->dev, "sleep", GPIOD_OUT_HIGH);
+ 	if (IS_ERR(nanosic->sleep_gpio))
+ 		return dev_err_probe(nanosic->dev, PTR_ERR(nanosic->sleep_gpio),
+ 				     "failed to get sleep gpio\n");
+diff --git a/drivers/power/supply/qcom_battmgr.c b/drivers/power/supply/qcom_battmgr.c
+index 11f0951c5..bc5b81543 100644
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -99,6 +99,17 @@ enum qcom_battmgr_variant {
+ #define WLS_BOOST_EN			6
+ 
+ #define BATTMGR_CHG_CTRL_LIMIT_EN	0x48
++#define BATTMGR_XM_PROPERTY_GET		0x50
++#define BATTMGR_XM_PROPERTY_SET		0x51
++
++#define XM_PROP_REVERSE_CHG_MODE	0x47
++#define XM_PROP_REVERSE_CHG_STATE	0x48
++#define XM_PROP_TX_IOUT			0x61
++#define XM_PROP_TX_VOUT			0x62
++#define XM_PROP_PEN_SOC			0x63
++#define XM_PROP_PEN_HALL3		0x64
++#define XM_PROP_PEN_HALL4		0x65
++#define XM_PROP_PEN_PLACE_ERR		0x6b
+ #define CHARGE_CTRL_START_THR_MIN	50
+ #define CHARGE_CTRL_START_THR_MAX	95
+ #define CHARGE_CTRL_END_THR_MIN		55
+@@ -322,6 +333,7 @@ struct qcom_battmgr {
+ 	enum qcom_battmgr_unit unit;
+ 
+ 	int error;
++	u32 xm_prop_val;
+ 	struct completion ack;
+ 
+ 	bool service_up;
+@@ -1586,9 +1598,27 @@ static void qcom_battmgr_sm8350_callback(struct qcom_battmgr *battmgr,
+ 		break;
+ 	case BATTMGR_REQUEST_NOTIFICATION:
+ 	case BATTMGR_CHG_CTRL_LIMIT_EN:
+-	case 0x50:
+ 		battmgr->error = 0;
+ 		break;
++	case BATTMGR_XM_PROPERTY_GET:
++		if (payload_len == sizeof(resp->intval)) {
++			battmgr->error = le32_to_cpu(resp->intval.result);
++			if (!battmgr->error)
++				battmgr->xm_prop_val = le32_to_cpu(resp->intval.value);
++		} else if (payload_len >= sizeof(__le32) * 2) {
++			battmgr->error = 0;
++			battmgr->xm_prop_val = le32_to_cpu(resp->intval.value);
++		} else {
++			battmgr->error = 0;
++		}
++		break;
++	case BATTMGR_XM_PROPERTY_SET:
++	case BATTMGR_WLS_PROPERTY_SET:
++		if (payload_len == sizeof(resp->intval))
++			battmgr->error = le32_to_cpu(resp->intval.result);
++		else
++			battmgr->error = 0;
++		break;
+ 	default:
+ 		dev_warn(battmgr->dev, "unknown message %#x\n", opcode);
+ 		break;
+@@ -1653,6 +1683,101 @@ static const struct of_device_id qcom_battmgr_of_variants[] = {
+ 
+ static char *qcom_battmgr_battery[] = { "battery" };
+ 
++static int qcom_battmgr_xm_get_prop(struct qcom_battmgr *battmgr, u32 prop, u32 *val)
++{
++	int ret;
++
++	if (!battmgr->service_up)
++		return -EAGAIN;
++
++	mutex_lock(&battmgr->lock);
++	ret = qcom_battmgr_request_property(battmgr, BATTMGR_XM_PROPERTY_GET, prop, 0);
++	if (!ret)
++		*val = battmgr->xm_prop_val;
++	mutex_unlock(&battmgr->lock);
++
++	return ret;
++}
++
++static int qcom_battmgr_xm_set_prop(struct qcom_battmgr *battmgr, u32 prop, u32 val)
++{
++	int ret;
++
++	if (!battmgr->service_up)
++		return -EAGAIN;
++
++	mutex_lock(&battmgr->lock);
++	ret = qcom_battmgr_request_property(battmgr, BATTMGR_XM_PROPERTY_SET, prop, val);
++	mutex_unlock(&battmgr->lock);
++
++	return ret < 0 ? ret : 0;
++}
++
++#define XM_PEN_RO_ATTR(_name, _prop)						\
++static ssize_t _name##_show(struct device *dev,					\
++			    struct device_attribute *attr, char *buf)		\
++{										\
++	struct qcom_battmgr *battmgr = dev_get_drvdata(dev);			\
++	u32 val = 0;								\
++	int ret = qcom_battmgr_xm_get_prop(battmgr, _prop, &val);		\
++	if (ret)								\
++		return ret;							\
++	return sysfs_emit(buf, "%d\n", (s32)val);				\
++}										\
++static DEVICE_ATTR_RO(_name)
++
++XM_PEN_RO_ATTR(pen_soc, XM_PROP_PEN_SOC);
++XM_PEN_RO_ATTR(tx_vout, XM_PROP_TX_VOUT);
++XM_PEN_RO_ATTR(tx_iout, XM_PROP_TX_IOUT);
++XM_PEN_RO_ATTR(reverse_chg_state, XM_PROP_REVERSE_CHG_STATE);
++XM_PEN_RO_ATTR(pen_hall3, XM_PROP_PEN_HALL3);
++XM_PEN_RO_ATTR(pen_hall4, XM_PROP_PEN_HALL4);
++XM_PEN_RO_ATTR(pen_place_err, XM_PROP_PEN_PLACE_ERR);
++
++static ssize_t reverse_chg_mode_show(struct device *dev,
++				     struct device_attribute *attr, char *buf)
++{
++	struct qcom_battmgr *battmgr = dev_get_drvdata(dev);
++	u32 val = 0;
++	int ret = qcom_battmgr_xm_get_prop(battmgr, XM_PROP_REVERSE_CHG_MODE, &val);
++
++	if (ret)
++		return ret;
++	return sysfs_emit(buf, "%d\n", (s32)val);
++}
++
++static ssize_t reverse_chg_mode_store(struct device *dev,
++				      struct device_attribute *attr,
++				      const char *buf, size_t count)
++{
++	struct qcom_battmgr *battmgr = dev_get_drvdata(dev);
++	int val, ret;
++
++	ret = kstrtoint(buf, 10, &val);
++	if (ret)
++		return ret;
++
++	ret = qcom_battmgr_xm_set_prop(battmgr, XM_PROP_REVERSE_CHG_MODE, (u32)val);
++	return ret ? ret : count;
++}
++static DEVICE_ATTR_RW(reverse_chg_mode);
++
++static struct attribute *qcom_battmgr_xm_pen_attrs[] = {
++	&dev_attr_pen_soc.attr,
++	&dev_attr_tx_vout.attr,
++	&dev_attr_tx_iout.attr,
++	&dev_attr_reverse_chg_state.attr,
++	&dev_attr_reverse_chg_mode.attr,
++	&dev_attr_pen_hall3.attr,
++	&dev_attr_pen_hall4.attr,
++	&dev_attr_pen_place_err.attr,
++	NULL,
++};
++
++static const struct attribute_group qcom_battmgr_xm_pen_group = {
++	.attrs = qcom_battmgr_xm_pen_attrs,
++};
++
+ static int qcom_battmgr_probe(struct auxiliary_device *adev,
+ 			      const struct auxiliary_device_id *id)
+ {
+@@ -1739,6 +1864,11 @@ static int qcom_battmgr_probe(struct auxiliary_device *adev,
+ 		if (IS_ERR(battmgr->wls_psy))
+ 			return dev_err_probe(dev, PTR_ERR(battmgr->wls_psy),
+ 					     "failed to register wireless charing power supply\n");
++
++		dev_set_drvdata(dev, battmgr);
++		ret = devm_device_add_group(dev, &qcom_battmgr_xm_pen_group);
++		if (ret)
++			dev_warn(dev, "failed to add Xiaomi pen sysfs group: %d\n", ret);
+ 	}
+ 
+ 	ret = devm_work_autocancel(dev, &battmgr->enable_work,
+-- 
+2.54.0 (Apple Git-157)
+

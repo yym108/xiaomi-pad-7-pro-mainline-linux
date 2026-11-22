@@ -1,0 +1,460 @@
+From 73797b958883ff34f9be6f5e002be7ca379351e3 Mon Sep 17 00:00:00 2001
+From: yym <183073514+yym108@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 14:55:29 +0800
+Subject: [PATCH 09/28] arm64: dts: qcom: sm8635-xiaomi-muyu: enable DP0
+ AltMode, quad AW88261 AudioReach and Hall switches
+
+---
+ .../boot/dts/qcom/sm8635-xiaomi-muyu.dts      | 358 +++++++++++++++++-
+ 1 file changed, 355 insertions(+), 3 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts b/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
+index c26193007..21c2e0155 100644
+--- a/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
++++ b/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
+@@ -19,7 +19,10 @@
+ #include <dt-bindings/interconnect/qcom,icc.h>
+ #include <dt-bindings/interconnect/qcom,sm8635-rpmh.h>
+ #include <dt-bindings/mailbox/qcom-ipcc.h>
++#include <dt-bindings/phy/phy-qcom-qmp.h>
+ #include <dt-bindings/power/qcom,rpmhpd.h>
++#include <dt-bindings/soc/qcom,gpr.h>
++#include <dt-bindings/sound/qcom,q6dsp-lpass-ports.h>
+ #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
+ #include <dt-bindings/soc/qcom,rpmh-rsc.h>
+ #include <dt-bindings/spmi/spmi.h>
+@@ -72,6 +75,66 @@ key-volume-up {
+ 			linux,can-disable;
+ 			wakeup-source;
+ 		};
++
++		switch-lid-hall {
++			label = "Lid Hall";
++			linux,input-type = <EV_SW>;
++			linux,code = <SW_LID>;
++			gpios = <&tlmm 99 GPIO_ACTIVE_LOW>;
++			debounce-interval = <15>;
++			wakeup-source;
++		};
++
++		switch-table-hall {
++			label = "Table Hall";
++			linux,input-type = <EV_SW>;
++			linux,code = <SW_TABLET_MODE>;
++			gpios = <&tlmm 100 GPIO_ACTIVE_LOW>;
++			debounce-interval = <15>;
++			wakeup-source;
++		};
++	};
++
++	sound {
++		compatible = "qcom,sm8650-sndcard", "qcom,sm8450-sndcard";
++		model = "Xiaomi-Pad-7-Pro";
++		pinctrl-0 = <&quin_mi2s_active>;
++		pinctrl-names = "default";
++
++		speaker-dai-link {
++			link-name = "Quinary MI2S Playback";
++
++			cpu {
++				sound-dai = <&q6apmbedai QUINARY_MI2S_RX>;
++			};
++
++			codec {
++				sound-dai = <&spkr_top_left>,
++					    <&spkr_bot_left>,
++					    <&spkr_top_right>,
++					    <&spkr_bot_right>;
++			};
++
++			platform {
++				sound-dai = <&q6apm>;
++			};
++		};
++
++		dp0-dai-link {
++			link-name = "DP0 Playback";
++
++			cpu {
++				sound-dai = <&q6apmbedai DISPLAY_PORT_RX_0>;
++			};
++
++			codec {
++				sound-dai = <&mdss_dp0>;
++			};
++
++			platform {
++				sound-dai = <&q6apm>;
++			};
++		};
+ 	};
+ 
+ 	smp2p_adsp: smp2p-adsp {
+@@ -741,6 +804,19 @@ connector@0 {
+ 			reg = <0>;
+ 			power-role = "dual";
+ 			data-role = "dual";
++
++			ports {
++				#address-cells = <1>;
++				#size-cells = <0>;
++
++				port@1 {
++					reg = <1>;
++
++					pmic_glink_ss_in: endpoint {
++						remote-endpoint = <&usb_dp_qmpphy_out>;
++					};
++				};
++			};
+ 		};
+ 	};
+ 
+@@ -1153,6 +1229,15 @@ vreg_l2b_0p88: ldo2 {
+ 					regulator-boot-on;
+ 				};
+ 
++				vreg_l3b_0p9: ldo3 {
++					regulator-name = "vreg_l3b_0p9";
++					regulator-min-microvolt = <880000>;
++					regulator-max-microvolt = <920000>;
++					regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++					regulator-boot-on;
++					regulator-always-on;
++				};
++
+ 				vreg_l4b_1p2: ldo4 {
+ 					regulator-name = "vreg_l4b_1p2";
+ 					regulator-min-microvolt = <1200000>;
+@@ -1290,7 +1375,8 @@ gcc: clock-controller@100000 {
+ 				 <&ufs_mem_phy 0>,
+ 				 <&ufs_mem_phy 1>,
+ 				 <&ufs_mem_phy 2>,
+-				 <&pcie0_phy>;
++				 <&pcie0_phy>,
++				 <&usb_dp_qmpphy QMP_USB43DP_USB3_PIPE_CLK>;
+ 			power-domains = <&rpmhpd RPMHPD_CX>;
+ 			#clock-cells = <1>;
+ 			#reset-cells = <1>;
+@@ -1308,8 +1394,8 @@ dispcc: clock-controller@af00000 {
+ 				 <&mdss_dsi0_phy DSI_PIXEL_PLL_CLK>,
+ 				 <&mdss_dsi1_phy DSI_BYTE_PLL_CLK>,
+ 				 <&mdss_dsi1_phy DSI_PIXEL_PLL_CLK>,
+-				 <0>,
+-				 <0>,
++				 <&usb_dp_qmpphy QMP_USB43DP_DP_LINK_CLK>,
++				 <&usb_dp_qmpphy QMP_USB43DP_DP_VCO_DIV_CLK>,
+ 				 <0>,
+ 				 <0>,
+ 				 <0>,
+@@ -1349,6 +1435,47 @@ gpucc: clock-controller@3d90000 {
+ 			#power-domain-cells = <1>;
+ 		};
+ 
++		usb_dp_qmpphy: phy@88e8000 {
++			compatible = "qcom,sm8650-qmp-usb3-dp-phy";
++			reg = <0x0 0x088e8000 0x0 0x3000>;
++			clocks = <&gcc GCC_USB3_PRIM_PHY_AUX_CLK>,
++				 <&rpmhcc RPMH_CXO_CLK>,
++				 <&gcc GCC_USB3_PRIM_PHY_COM_AUX_CLK>,
++				 <&gcc GCC_USB3_PRIM_PHY_PIPE_CLK>;
++			clock-names = "aux", "ref", "com_aux", "usb3_pipe";
++			resets = <&gcc GCC_USB3_PHY_PRIM_BCR>,
++				 <&gcc GCC_USB3_DP_PHY_PRIM_BCR>;
++			reset-names = "phy", "common";
++			vdda-phy-supply = <&vreg_l3b_0p9>;
++			vdda-pll-supply = <&vreg_l4b_1p2>;
++			power-domains = <&gcc USB3_PHY_GDSC>;
++			#clock-cells = <1>;
++			#phy-cells = <1>;
++			mode-switch;
++			orientation-switch;
++
++			ports {
++				#address-cells = <1>;
++				#size-cells = <0>;
++
++				port@0 {
++					reg = <0>;
++
++					usb_dp_qmpphy_out: endpoint {
++						remote-endpoint = <&pmic_glink_ss_in>;
++					};
++				};
++
++				port@2 {
++					reg = <2>;
++
++					usb_dp_qmpphy_dp_in: endpoint {
++						remote-endpoint = <&mdss_dp0_out>;
++					};
++				};
++			};
++		};
++
+ 		usb_1_hsphy: phy@88e3000 {
+ 			compatible = "qcom,sm8650-snps-eusb2-phy",
+ 				     "qcom,sm8550-snps-eusb2-phy";
+@@ -1951,6 +2078,27 @@ i2c0: i2c@a80000 {
+ 				#address-cells = <1>;
+ 				#size-cells = <0>;
+ 
++				wcd_usbss: typec-mux@e {
++					compatible = "qcom,wcd9395-usbss", "qcom,wcd9390-usbss";
++					reg = <0x0e>;
++					vdd-supply = <&vreg_l7b_1p8>;
++					reset-gpios = <&tlmm 119 GPIO_ACTIVE_HIGH>;
++					mode-switch;
++					orientation-switch;
++
++					ports {
++						#address-cells = <1>;
++						#size-cells = <0>;
++
++						port@0 {
++							reg = <0>;
++
++							wcd_usbss_sbu_mux: endpoint {
++							};
++						};
++					};
++				};
++
+ 				backlight: backlight@11 {
+ 					compatible = "kinetic,ktz8866";
+ 					reg = <0x11>;
+@@ -2061,6 +2209,46 @@ i2c11: i2c@88c000 {
+ 				clock-frequency = <400000>;
+ 				#address-cells = <1>;
+ 				#size-cells = <0>;
++
++				spkr_top_left: audio-codec@34 {
++					compatible = "awinic,aw88261";
++					reg = <0x34>;
++					dvdd-supply = <&vreg_l7b_1p8>;
++					reset-gpios = <&tlmm 30 GPIO_ACTIVE_HIGH>;
++					awinic,audio-channel = <0>;
++					sound-name-prefix = "SpkrTopLeft";
++					#sound-dai-cells = <0>;
++				};
++
++				spkr_bot_left: audio-codec@35 {
++					compatible = "awinic,aw88261";
++					reg = <0x35>;
++					dvdd-supply = <&vreg_l7b_1p8>;
++					reset-gpios = <&tlmm 149 GPIO_ACTIVE_HIGH>;
++					awinic,audio-channel = <1>;
++					sound-name-prefix = "SpkrBotLeft";
++					#sound-dai-cells = <0>;
++				};
++
++				spkr_top_right: audio-codec@36 {
++					compatible = "awinic,aw88261";
++					reg = <0x36>;
++					dvdd-supply = <&vreg_l7b_1p8>;
++					reset-gpios = <&tlmm 123 GPIO_ACTIVE_HIGH>;
++					awinic,audio-channel = <2>;
++					sound-name-prefix = "SpkrTopRight";
++					#sound-dai-cells = <0>;
++				};
++
++				spkr_bot_right: audio-codec@37 {
++					compatible = "awinic,aw88261";
++					reg = <0x37>;
++					dvdd-supply = <&vreg_l7b_1p8>;
++					reset-gpios = <&tlmm 124 GPIO_ACTIVE_HIGH>;
++					awinic,audio-channel = <3>;
++					sound-name-prefix = "SpkrBotRight";
++					#sound-dai-cells = <0>;
++				};
+ 			};
+ 
+ 			i2c12: i2c@890000 {
+@@ -2281,6 +2469,80 @@ compute-cb@7 {
+ 						dma-coherent;
+ 					};
+ 				};
++
++				gpr {
++					compatible = "qcom,gpr";
++					qcom,glink-channels = "adsp_apps";
++					qcom,domain = <GPR_DOMAIN_ID_ADSP>;
++					qcom,intents = <512 20>;
++					#address-cells = <1>;
++					#size-cells = <0>;
++
++					q6apm: service@1 {
++						compatible = "qcom,q6apm";
++						reg = <GPR_APM_MODULE_IID>;
++						#sound-dai-cells = <0>;
++						qcom,protection-domain = "avs/audio",
++									 "msm/adsp/audio_pd";
++
++						q6apmbedai: bedais {
++							compatible = "qcom,q6apm-lpass-dais";
++							#sound-dai-cells = <1>;
++						};
++
++						q6apmdai: dais {
++							compatible = "qcom,q6apm-dais";
++							iommus = <&apps_smmu 0x1001 0x80>,
++								 <&apps_smmu 0x1061 0x0>;
++						};
++					};
++
++					q6prm: service@2 {
++						compatible = "qcom,q6prm";
++						reg = <GPR_PRM_MODULE_IID>;
++						qcom,protection-domain = "avs/audio",
++									 "msm/adsp/audio_pd";
++
++						q6prmcc: clock-controller {
++							compatible = "qcom,q6prm-lpass-clocks";
++							#clock-cells = <2>;
++						};
++					};
++				};
++			};
++		};
++
++		lpass_tlmm: pinctrl@6e80000 {
++			compatible = "qcom,sm8650-lpass-lpi-pinctrl";
++			reg = <0x0 0x06e80000 0x0 0x20000>;
++			clocks = <&q6prmcc LPASS_HW_MACRO_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
++				 <&q6prmcc LPASS_HW_DCODEC_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
++			clock-names = "core", "audio";
++			gpio-controller;
++			#gpio-cells = <2>;
++			gpio-ranges = <&lpass_tlmm 0 0 23>;
++
++			quin_mi2s_active: quin-mi2s-active-state {
++				sck-pins {
++					pins = "gpio6";
++					function = "i2s1_clk";
++					drive-strength = <8>;
++					bias-disable;
++				};
++
++				ws-pins {
++					pins = "gpio7";
++					function = "i2s1_ws";
++					drive-strength = <8>;
++					bias-disable;
++				};
++
++				data-pins {
++					pins = "gpio8", "gpio9";
++					function = "i2s1_data";
++					drive-strength = <8>;
++					bias-disable;
++				};
+ 			};
+ 		};
+ 
+@@ -2661,6 +2923,12 @@ dpu_intf2_out: endpoint {
+ 							remote-endpoint = <&mdss_dsi1_in>;
+ 						};
+ 					};
++					port@2 {
++						reg = <2>;
++						dpu_intf0_out: endpoint {
++							remote-endpoint = <&mdss_dp0_in>;
++						};
++					};
+ 				};
+ 
+ 				mdp_opp_table: opp-table {
+@@ -2846,6 +3114,90 @@ mdss_dsi1_phy: phy@ae97000 {
+ 				#clock-cells = <1>;
+ 				#phy-cells = <0>;
+ 			};
++
++			mdss_dp0: displayport-controller@af54000 {
++				compatible = "qcom,sm8650-dp";
++				reg = <0x0 0x0af54000 0x0 0x200>,
++				      <0x0 0x0af54200 0x0 0x200>,
++				      <0x0 0x0af55000 0x0 0xc00>,
++				      <0x0 0x0af56000 0x0 0x400>,
++				      <0x0 0x0af57000 0x0 0x400>,
++				      <0x0 0x0af58000 0x0 0x400>,
++				      <0x0 0x0af59000 0x0 0x400>,
++				      <0x0 0x0af5a000 0x0 0x600>,
++				      <0x0 0x0af5b000 0x0 0x600>;
++				interrupts-extended = <&mdss 12>;
++				clocks = <&dispcc DISP_CC_MDSS_AHB_CLK>,
++					 <&dispcc DISP_CC_MDSS_DPTX0_AUX_CLK>,
++					 <&dispcc DISP_CC_MDSS_DPTX0_LINK_CLK>,
++					 <&dispcc DISP_CC_MDSS_DPTX0_LINK_INTF_CLK>,
++					 <&dispcc DISP_CC_MDSS_DPTX0_PIXEL0_CLK>,
++					 <&dispcc DISP_CC_MDSS_DPTX0_PIXEL1_CLK>;
++				clock-names = "core_iface",
++					      "core_aux",
++					      "ctrl_link",
++					      "ctrl_link_iface",
++					      "stream_pixel",
++					      "stream_1_pixel";
++				assigned-clocks = <&dispcc DISP_CC_MDSS_DPTX0_LINK_CLK_SRC>,
++						  <&dispcc DISP_CC_MDSS_DPTX0_PIXEL0_CLK_SRC>,
++						  <&dispcc DISP_CC_MDSS_DPTX0_PIXEL1_CLK_SRC>;
++				assigned-clock-parents = <&usb_dp_qmpphy QMP_USB43DP_DP_LINK_CLK>,
++							 <&usb_dp_qmpphy QMP_USB43DP_DP_VCO_DIV_CLK>,
++							 <&usb_dp_qmpphy QMP_USB43DP_DP_VCO_DIV_CLK>;
++				operating-points-v2 = <&dp_opp_table>;
++				power-domains = <&rpmhpd RPMHPD_MMCX>;
++				phys = <&usb_dp_qmpphy QMP_USB43DP_DP_PHY>;
++				phy-names = "dp";
++				#sound-dai-cells = <0>;
++				sound-name-prefix = "DisplayPort0";
++
++				dp_opp_table: opp-table {
++					compatible = "operating-points-v2";
++
++					opp-162000000 {
++						opp-hz = /bits/ 64 <162000000>;
++						required-opps = <&rpmhpd_opp_low_svs>;
++					};
++
++					opp-270000000 {
++						opp-hz = /bits/ 64 <270000000>;
++						required-opps = <&rpmhpd_opp_low_svs>;
++					};
++
++					opp-540000000 {
++						opp-hz = /bits/ 64 <540000000>;
++						required-opps = <&rpmhpd_opp_svs_l1>;
++					};
++
++					opp-810000000 {
++						opp-hz = /bits/ 64 <810000000>;
++						required-opps = <&rpmhpd_opp_nom>;
++					};
++				};
++
++				ports {
++					#address-cells = <1>;
++					#size-cells = <0>;
++
++					port@0 {
++						reg = <0>;
++
++						mdss_dp0_in: endpoint {
++							remote-endpoint = <&dpu_intf0_out>;
++						};
++					};
++
++					port@1 {
++						reg = <1>;
++
++						mdss_dp0_out: endpoint {
++							data-lanes = <0 1 2 3>;
++							remote-endpoint = <&usb_dp_qmpphy_dp_in>;
++						};
++					};
++				};
++			};
+ 		};
+ 	};
+ };
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,0 +1,304 @@
+From c60b5692fd64ede4af09be6322df952332347a8d Mon Sep 17 00:00:00 2001
+From: yym <183073514+yym108@users.noreply.github.com>
+Date: Sun, 22 Nov 2026 01:19:58 +0800
+Subject: [PATCH 19/28] Input: novatek-nt36532-spi - add Xiaomi Focus Pen
+ (P81c) active stylus support
+
+---
+ .../input/touchscreen/novatek-nt36532-spi.c   | 211 +++++++++++++++++-
+ 1 file changed, 208 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/input/touchscreen/novatek-nt36532-spi.c b/drivers/input/touchscreen/novatek-nt36532-spi.c
+index 1d4fee48c..dd13d0713 100644
+--- a/drivers/input/touchscreen/novatek-nt36532-spi.c
++++ b/drivers/input/touchscreen/novatek-nt36532-spi.c
+@@ -43,7 +43,23 @@
+ #define NVT_Y_NODES			40
+ #define NVT_NUM_NODES			(NVT_X_NODES * NVT_Y_NODES)
+ #define NVT_HTC_HDR_LEN			64
+-#define NVT_HTC_READ_LEN		(NVT_HTC_HDR_LEN + NVT_NUM_NODES * 2)
++#define NVT_HTC_FRAME_LEN		5360
++
++#define NVT_HTC_TYPE_FINGER		0x03
++#define NVT_HTC_TYPE_STYLUS		0x1D
++
++#define NVT_PEN_MAT0_OFF		0x64	/* 40 rows x 12 cols (fine Y) */
++#define NVT_PEN_MAT1_OFF		0x424	/* 8 rows x 60 cols (fine X) */
++#define NVT_PEN_MAT0_ROWS		40
++#define NVT_PEN_MAT0_COLS		12
++#define NVT_PEN_MAT1_ROWS		8
++#define NVT_PEN_MAT1_COLS		60
++#define NVT_PEN_PRESSURE_MAX		4095
++#define NVT_PEN_PEAK_MIN		25
++#define NVT_PEN_TOUCH_DOWN_MIN		120
++#define NVT_PEN_TOUCH_UP_MIN		85
++#define NVT_PEN_NEIGHBOR_MIN		10
++#define NVT_PEN_MISS_MAX		8
+ 
+ #define NVT_DEFAULT_MAX_X		3200
+ #define NVT_DEFAULT_MAX_Y		2136
+@@ -54,8 +70,10 @@
+ struct nvt_nt36532_ts {
+ 	struct spi_device *spi;
+ 	struct input_dev *input;
++	struct input_dev *pen_input;
+ 	struct gpio_desc *lcd_id_gpio;
+ 	struct delayed_work init_work;
++	struct mutex lock;
+ 	const char *fw_name;
+ 	u8 *tx_buf;
+ 	u8 *rx_buf;
+@@ -66,6 +84,9 @@ struct nvt_nt36532_ts {
+ 	int base_frames;
+ 	bool base_ready;
+ 	bool was_touching;
++	bool pen_active;
++	bool pen_touching;
++	int pen_miss_cnt;
+ 	u16 max_x;
+ 	u16 max_y;
+ };
+@@ -299,6 +320,142 @@ static int nvt_download_fw(struct nvt_nt36532_ts *ts, const struct firmware *fw)
+ 	return -ETIMEDOUT;
+ }
+ 
++static void nvt_release_pen(struct nvt_nt36532_ts *ts)
++{
++	ts->pen_miss_cnt = 0;
++	ts->pen_touching = false;
++	if (!ts->pen_active)
++		return;
++
++	input_report_abs(ts->pen_input, ABS_PRESSURE, 0);
++	input_report_abs(ts->pen_input, ABS_DISTANCE, 0);
++	input_report_key(ts->pen_input, BTN_TOUCH, 0);
++	input_report_key(ts->pen_input, BTN_TOOL_PEN, 0);
++	input_sync(ts->pen_input);
++	ts->pen_active = false;
++}
++
++static void nvt_process_stylus_frame(struct nvt_nt36532_ts *ts)
++{
++	const u8 *mat0 = ts->frame_buf + NVT_PEN_MAT0_OFF;
++	const u8 *mat1 = ts->frame_buf + NVT_PEN_MAT1_OFF;
++	int r, c, r0 = 0, c0 = 0, r1 = 0, c1 = 0;
++	s16 peak0 = 0, peak1 = 0;
++	s64 wsum = 0, xsum = 0, ysum = 0;
++	int x, y;
++	u16 pressure;
++
++	/* Palm rejection: release active fingers while stylus is in proximity */
++	if (ts->was_touching) {
++		struct input_mt_pos pos[NVT_MAX_TOUCHES];
++		int slots[NVT_MAX_TOUCHES];
++
++		input_mt_assign_slots(ts->input, slots, pos, 0, 0);
++		input_mt_sync_frame(ts->input);
++		input_sync(ts->input);
++		ts->was_touching = false;
++	}
++
++	/* Mat0 (40 rows x 12 cols): high-resolution Y axis */
++	for (r = 0; r < NVT_PEN_MAT0_ROWS; r++) {
++		for (c = 0; c < NVT_PEN_MAT0_COLS; c++) {
++			s16 v = (s16)get_unaligned_le16(mat0 + (r * NVT_PEN_MAT0_COLS + c) * 2);
++
++			if (v > peak0) {
++				peak0 = v;
++				r0 = r;
++				c0 = c;
++			}
++		}
++	}
++
++	/* Mat1 (8 rows x 60 cols): high-resolution X axis */
++	for (r = 0; r < NVT_PEN_MAT1_ROWS; r++) {
++		for (c = 0; c < NVT_PEN_MAT1_COLS; c++) {
++			s16 v = (s16)get_unaligned_le16(mat1 + (r * NVT_PEN_MAT1_COLS + c) * 2);
++
++			if (v > peak1) {
++				peak1 = v;
++				r1 = r;
++				c1 = c;
++			}
++		}
++	}
++
++	if (peak0 < NVT_PEN_PEAK_MIN || peak1 < NVT_PEN_PEAK_MIN) {
++		if (++ts->pen_miss_cnt >= NVT_PEN_MISS_MAX)
++			nvt_release_pen(ts);
++		return;
++	}
++	ts->pen_miss_cnt = 0;
++
++	/* Weighted Y centroid from Mat0 around (r0, c0) */
++	for (r = max(0, r0 - 2); r <= min(NVT_PEN_MAT0_ROWS - 1, r0 + 2); r++) {
++		for (c = max(0, c0 - 1); c <= min(NVT_PEN_MAT0_COLS - 1, c0 + 1); c++) {
++			s16 v = (s16)get_unaligned_le16(mat0 + (r * NVT_PEN_MAT0_COLS + c) * 2);
++
++			if (v >= NVT_PEN_NEIGHBOR_MIN) {
++				wsum += v;
++				ysum += (s64)v * r;
++			}
++		}
++	}
++	if (wsum <= 0) {
++		nvt_release_pen(ts);
++		return;
++	}
++	y = div64_s64(ysum * (ts->max_y - 1), wsum * (NVT_PEN_MAT0_ROWS - 1));
++	y = (ts->max_y - 1) - clamp_val(y, 0, ts->max_y - 1);
++
++	/* Weighted X centroid from Mat1 around (r1, c1) */
++	wsum = 0;
++	for (r = max(0, r1 - 1); r <= min(NVT_PEN_MAT1_ROWS - 1, r1 + 1); r++) {
++		for (c = max(0, c1 - 2); c <= min(NVT_PEN_MAT1_COLS - 1, c1 + 2); c++) {
++			s16 v = (s16)get_unaligned_le16(mat1 + (r * NVT_PEN_MAT1_COLS + c) * 2);
++
++			if (v >= NVT_PEN_NEIGHBOR_MIN) {
++				wsum += v;
++				xsum += (s64)v * c;
++			}
++		}
++	}
++	if (wsum <= 0) {
++		nvt_release_pen(ts);
++		return;
++	}
++	x = div64_s64(xsum * (ts->max_x - 1), wsum * (NVT_PEN_MAT1_COLS - 1));
++	x = clamp_val(x, 0, ts->max_x - 1);
++
++	/*
++	 * Derive touch vs hover with hysteresis from tip signal amplitude, and
++	 * map contact amplitude smoothly into 0..4095 pressure range.
++	 */
++	if (ts->pen_touching) {
++		if (max(peak0, peak1) < NVT_PEN_TOUCH_UP_MIN)
++			ts->pen_touching = false;
++	} else {
++		if (max(peak0, peak1) >= NVT_PEN_TOUCH_DOWN_MIN)
++			ts->pen_touching = true;
++	}
++
++	if (ts->pen_touching) {
++		int amp = max(peak0, peak1) - NVT_PEN_TOUCH_UP_MIN;
++
++		pressure = clamp_val(amp * 14, 256, NVT_PEN_PRESSURE_MAX);
++	} else {
++		pressure = 0;
++	}
++
++	input_report_key(ts->pen_input, BTN_TOOL_PEN, 1);
++	input_report_key(ts->pen_input, BTN_TOUCH, ts->pen_touching);
++	input_report_abs(ts->pen_input, ABS_X, x);
++	input_report_abs(ts->pen_input, ABS_Y, y);
++	input_report_abs(ts->pen_input, ABS_PRESSURE, pressure);
++	input_report_abs(ts->pen_input, ABS_DISTANCE, ts->pen_touching ? 0 : 1);
++	input_sync(ts->pen_input);
++	ts->pen_active = true;
++}
++
+ static void nvt_process_htc_frame(struct nvt_nt36532_ts *ts)
+ {
+ 	const u8 *raw = ts->frame_buf + NVT_HTC_HDR_LEN;
+@@ -310,6 +467,20 @@ static void nvt_process_htc_frame(struct nvt_nt36532_ts *ts)
+ 	if (ts->frame_buf[0] != 0xA5 || ts->frame_buf[1] != 0x61)
+ 		return;
+ 
++	if (ts->frame_buf[0x38] == NVT_HTC_TYPE_STYLUS) {
++		nvt_process_stylus_frame(ts);
++		return;
++	}
++
++	if (ts->frame_buf[0x38] != NVT_HTC_TYPE_FINGER)
++		return;
++
++	if (ts->pen_active) {
++		if (++ts->pen_miss_cnt < NVT_PEN_MISS_MAX)
++			return;
++		nvt_release_pen(ts);
++	}
++
+ 	if (!ts->base_ready) {
+ 		for (i = 0; i < NVT_NUM_NODES; i++)
+ 			ts->base_sum[i] += (s16)get_unaligned_le16(raw + i * 2);
+@@ -431,9 +602,11 @@ static irqreturn_t nvt_nt36532_irq_handler(int irq, void *dev_id)
+ 	struct nvt_nt36532_ts *ts = dev_id;
+ 	int ret;
+ 
+-	ret = nvt_spi_read(ts, NVT_HTC_FRAME_ADDR, ts->frame_buf, NVT_HTC_READ_LEN);
++	mutex_lock(&ts->lock);
++	ret = nvt_spi_read(ts, NVT_HTC_FRAME_ADDR, ts->frame_buf, NVT_HTC_FRAME_LEN);
+ 	if (!ret)
+ 		nvt_process_htc_frame(ts);
++	mutex_unlock(&ts->lock);
+ 
+ 	return IRQ_HANDLED;
+ }
+@@ -443,6 +616,7 @@ static void nvt_init_work(struct work_struct *work)
+ 	struct nvt_nt36532_ts *ts = container_of(work, struct nvt_nt36532_ts, init_work.work);
+ 	struct spi_device *spi = ts->spi;
+ 	const struct firmware *fw = NULL;
++	static const u8 pen_cmd[2] = { 0x7B, 0x02 }; /* Enable P81c Focus Pen */
+ 	u8 fw_info[24] = { 0 };
+ 	int ret;
+ 
+@@ -467,6 +641,13 @@ static void nvt_init_work(struct work_struct *work)
+ 			 ts->max_x, ts->max_y);
+ 	}
+ 
++	/* Enable Xiaomi Focus Pen (P81c) active stylus scanning */
++	ret = nvt_spi_write(ts, NVT_EVENT_BUF_ADDR + 0x50, pen_cmd, sizeof(pen_cmd));
++	if (ret)
++		dev_warn(&spi->dev, "failed to enable Focus Pen mode: %d\n", ret);
++	else
++		msleep(20);
++
+ 	ret = devm_request_threaded_irq(&spi->dev, spi->irq, NULL,
+ 					nvt_nt36532_irq_handler,
+ 					IRQF_TRIGGER_RISING | IRQF_ONESHOT,
+@@ -495,9 +676,10 @@ static int nvt_nt36532_probe(struct spi_device *spi)
+ 	ts->spi = spi;
+ 	ts->max_x = NVT_DEFAULT_MAX_X;
+ 	ts->max_y = NVT_DEFAULT_MAX_Y;
++	mutex_init(&ts->lock);
+ 	ts->tx_buf = devm_kzalloc(&spi->dev, NVT_MAX_SPI_XFER, GFP_KERNEL);
+ 	ts->rx_buf = devm_kzalloc(&spi->dev, NVT_MAX_SPI_XFER, GFP_KERNEL);
+-	ts->frame_buf = devm_kzalloc(&spi->dev, NVT_HTC_READ_LEN, GFP_KERNEL);
++	ts->frame_buf = devm_kzalloc(&spi->dev, NVT_HTC_FRAME_LEN, GFP_KERNEL);
+ 	if (!ts->tx_buf || !ts->rx_buf || !ts->frame_buf)
+ 		return -ENOMEM;
+ 
+@@ -543,6 +725,29 @@ static int nvt_nt36532_probe(struct spi_device *spi)
+ 	if (ret)
+ 		return ret;
+ 
++	ts->pen_input = devm_input_allocate_device(&spi->dev);
++	if (!ts->pen_input)
++		return -ENOMEM;
++
++	ts->pen_input->name = "Novatek NT36532 Stylus";
++	ts->pen_input->id.bustype = BUS_SPI;
++	__set_bit(EV_KEY, ts->pen_input->evbit);
++	__set_bit(EV_ABS, ts->pen_input->evbit);
++	__set_bit(BTN_TOOL_PEN, ts->pen_input->keybit);
++	__set_bit(BTN_TOUCH, ts->pen_input->keybit);
++	__set_bit(INPUT_PROP_DIRECT, ts->pen_input->propbit);
++
++	input_set_abs_params(ts->pen_input, ABS_X, 0, ts->max_x - 1, 0, 0);
++	input_set_abs_params(ts->pen_input, ABS_Y, 0, ts->max_y - 1, 0, 0);
++	input_set_abs_params(ts->pen_input, ABS_PRESSURE, 0, NVT_PEN_PRESSURE_MAX, 0, 0);
++	input_set_abs_params(ts->pen_input, ABS_DISTANCE, 0, 1, 0, 0);
++	input_abs_set_res(ts->pen_input, ABS_X, 13);
++	input_abs_set_res(ts->pen_input, ABS_Y, 13);
++
++	ret = input_register_device(ts->pen_input);
++	if (ret)
++		return ret;
++
+ 	spi_set_drvdata(spi, ts);
+ 	INIT_DELAYED_WORK(&ts->init_work, nvt_init_work);
+ 	schedule_delayed_work(&ts->init_work, msecs_to_jiffies(3000));
+-- 
+2.54.0 (Apple Git-157)
+

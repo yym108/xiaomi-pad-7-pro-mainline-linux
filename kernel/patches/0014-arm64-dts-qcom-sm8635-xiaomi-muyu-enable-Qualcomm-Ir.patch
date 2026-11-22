@@ -1,0 +1,140 @@
+From 04f06d00203ab6ba5954c19ffd904a1f63961a21 Mon Sep 17 00:00:00 2001
+From: yym <183073514+yym108@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 17:29:39 +0800
+Subject: [PATCH 14/28] arm64: dts: qcom: sm8635-xiaomi-muyu: enable Qualcomm
+ Iris VPU3.0 hardware video codec
+
+---
+ .../boot/dts/qcom/sm8635-xiaomi-muyu.dts      | 89 ++++++++++++++++++-
+ drivers/clk/qcom/gcc-sm8635.c                 |  1 +
+ 2 files changed, 89 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts b/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
+index ade605ffe..0a0a01e19 100644
+--- a/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
++++ b/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
+@@ -15,6 +15,7 @@
+ #include <dt-bindings/clock/qcom,sm8650-gcc.h>
+ #include <dt-bindings/clock/qcom,sm8650-gpucc.h>
+ #include <dt-bindings/clock/qcom,sm8650-tcsr.h>
++#include <dt-bindings/clock/qcom,sm8650-videocc.h>
+ #include <dt-bindings/dma/qcom-gpi.h>
+ #include <dt-bindings/interconnect/qcom,icc.h>
+ #include <dt-bindings/interconnect/qcom,sm8635-rpmh.h>
+@@ -399,7 +400,7 @@ gpu_micro_code_mem: gpu_microcode_region@9899a000 {
+ 			no-map;
+ 		};
+ 
+-		video_region@9899c000 {
++		video_mem: video_region@9899c000 {
+ 			reg = <0x00 0x9899c000 0x00 0x800000>;
+ 			no-map;
+ 		};
+@@ -1409,6 +1410,92 @@ dispcc: clock-controller@af00000 {
+ 			#power-domain-cells = <1>;
+ 		};
+ 
++		iris: video-codec@aa00000 {
++			compatible = "qcom,sm8650-iris";
++			reg = <0x0 0x0aa00000 0x0 0xf0000>;
++			interrupts = <GIC_SPI 174 IRQ_TYPE_LEVEL_HIGH>;
++			firmware-name = "vpu30_2v.mbn";
++
++			power-domains = <&videocc VIDEO_CC_MVS0C_GDSC>,
++					<&videocc VIDEO_CC_MVS0_GDSC>,
++					<&rpmhpd RPMHPD_MXC>,
++					<&rpmhpd RPMHPD_MMCX>;
++			power-domain-names = "venus",
++					     "vcodec0",
++					     "mxc",
++					     "mmcx";
++
++			operating-points-v2 = <&iris_opp_table>;
++
++			clocks = <&gcc GCC_VIDEO_AXI0_CLK>,
++				 <&videocc VIDEO_CC_MVS0C_CLK>,
++				 <&videocc VIDEO_CC_MVS0_CLK>;
++			clock-names = "iface",
++				      "core",
++				      "vcodec0_core";
++
++			interconnects = <&gem_noc SM8635_GEM_NOC_CHM_APPS QCOM_ICC_TAG_ACTIVE_ONLY
++					 &config_noc SM8635_CONFIG_NOC_QHS_VENUS_CFG QCOM_ICC_TAG_ACTIVE_ONLY>,
++					<&mmss_noc SM8635_MMSS_NOC_QNM_VIDEO QCOM_ICC_TAG_ALWAYS
++					 &mc_virt SM8635_MC_VIRT_EBI QCOM_ICC_TAG_ALWAYS>;
++			interconnect-names = "cpu-cfg",
++					     "video-mem";
++
++			memory-region = <&video_mem>;
++
++			resets = <&gcc GCC_VIDEO_AXI0_CLK_ARES>,
++				 <&videocc VIDEO_CC_XO_CLK_ARES>,
++				 <&videocc VIDEO_CC_MVS0C_CLK_ARES>;
++			reset-names = "bus",
++				      "xo",
++				      "core";
++
++			iommus = <&apps_smmu 0x1940 0>,
++				 <&apps_smmu 0x1947 0>;
++
++			dma-coherent;
++
++			iris_opp_table: opp-table {
++				compatible = "operating-points-v2";
++
++				opp-192000000 {
++					opp-hz = /bits/ 64 <192000000>;
++					required-opps = <&rpmhpd_opp_low_svs>,
++							<&rpmhpd_opp_low_svs>;
++				};
++
++				opp-240000000 {
++					opp-hz = /bits/ 64 <240000000>;
++					required-opps = <&rpmhpd_opp_svs>,
++							<&rpmhpd_opp_low_svs>;
++				};
++
++				opp-338000000 {
++					opp-hz = /bits/ 64 <338000000>;
++					required-opps = <&rpmhpd_opp_svs_l1>,
++							<&rpmhpd_opp_svs>;
++				};
++
++				opp-366000000 {
++					opp-hz = /bits/ 64 <366000000>;
++					required-opps = <&rpmhpd_opp_svs_l1>,
++							<&rpmhpd_opp_svs_l1>;
++				};
++
++				opp-444000000 {
++					opp-hz = /bits/ 64 <444000000>;
++					required-opps = <&rpmhpd_opp_svs_l1>,
++							<&rpmhpd_opp_nom>;
++				};
++
++				opp-533333334 {
++					opp-hz = /bits/ 64 <533333334>;
++					required-opps = <&rpmhpd_opp_svs_l1>,
++							<&rpmhpd_opp_turbo>;
++				};
++			};
++		};
++
+ 		videocc: clock-controller@aaf0000 {
+ 			compatible = "qcom,sm8635-videocc";
+ 			reg = <0x0 0x0aaf0000 0x0 0x10000>;
+diff --git a/drivers/clk/qcom/gcc-sm8635.c b/drivers/clk/qcom/gcc-sm8635.c
+index 8439c2532..8dd66a3fc 100644
+--- a/drivers/clk/qcom/gcc-sm8635.c
++++ b/drivers/clk/qcom/gcc-sm8635.c
+@@ -1477,6 +1477,7 @@ static const struct qcom_reset_map gcc_sm8635_resets[] = {
+ 	[GCC_USB30_PRIM_BCR] = { 0x39000 },
+ 	[GCC_USB3_DP_PHY_PRIM_BCR] = { 0x50008 },
+ 	[GCC_USB3_PHY_PRIM_BCR] = { 0x50000 },
++	[GCC_VIDEO_AXI0_CLK_ARES] = { .reg = 0x32018, .bit = 2, .udelay = 1000 },
+ };
+ 
+ static const struct regmap_config gcc_sm8635_regmap_config = {
+-- 
+2.54.0 (Apple Git-157)
+

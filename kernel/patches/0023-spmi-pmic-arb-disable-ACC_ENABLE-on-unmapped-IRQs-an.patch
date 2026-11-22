@@ -1,0 +1,79 @@
+From 8d61cc51110ac1b0cf4d868e5abc01ac2d73c22b Mon Sep 17 00:00:00 2001
+From: yym <183073514+yym108@users.noreply.github.com>
+Date: Sun, 22 Nov 2026 15:59:42 +0800
+Subject: [PATCH 23/28] spmi: pmic-arb: disable ACC_ENABLE on unmapped IRQs and
+ add GPU passive thermal cooling
+
+---
+ arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts | 17 +++++++++++++++--
+ drivers/spmi/spmi-pmic-arb.c                    |  2 ++
+ 2 files changed, 17 insertions(+), 2 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts b/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
+index c61051366..9353ca3d6 100644
+--- a/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
++++ b/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
+@@ -226,17 +226,30 @@ cpu_prime_crit: trip-crit {
+ 		};
+ 
+ 		gpu-thermal {
+-			polling-delay-passive = <0>;
++			polling-delay-passive = <250>;
+ 			polling-delay = <0>;
+ 			thermal-sensors = <&tsens1 8>;
+ 
+ 			trips {
++				gpu_alert0: trip-point0 {
++					temperature = <85000>;
++					hysteresis = <2000>;
++					type = "passive";
++				};
++
+ 				gpu_crit: trip-crit {
+ 					temperature = <115000>;
+ 					hysteresis = <1000>;
+ 					type = "critical";
+ 				};
+ 			};
++
++			cooling-maps {
++				map0 {
++					trip = <&gpu_alert0>;
++					cooling-device = <&gpu THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
+ 		};
+ 
+ 		ddr-thermal {
+@@ -978,7 +991,7 @@ spmi_bus: spmi@c400000 {
+ 			reg = <0x0 0x0c400000 0x0 0x3000>,
+ 			      <0x0 0x0c500000 0x0 0x400000>,
+ 			      <0x0 0x0c440000 0x0 0x80000>,
+-			      <0x0 0x0c4c0000 0x0 0x20000>,
++			      <0x0 0x0c4c0000 0x0 0x10000>,
+ 			      <0x0 0x0c42d000 0x0 0x4000>;
+ 			reg-names = "core", "chnls", "obsrvr", "intr", "cnfg";
+ 			interrupts-extended = <&pdc 1 IRQ_TYPE_LEVEL_HIGH>;
+diff --git a/drivers/spmi/spmi-pmic-arb.c b/drivers/spmi/spmi-pmic-arb.c
+index a7293fbec..3e64e122d 100644
+--- a/drivers/spmi/spmi-pmic-arb.c
++++ b/drivers/spmi/spmi-pmic-arb.c
+@@ -722,6 +722,7 @@ static void cleanup_irq(struct spmi_pmic_arb_bus *bus, u16 apid, int id)
+ 
+ 	dev_err_ratelimited(&bus->spmic->dev, "%s apid=%d sid=0x%x per=0x%x irq=%d\n",
+ 			    __func__, apid, sid, per, id);
++	writel_relaxed(0, pmic_arb->ver_ops->acc_enable(bus, apid));
+ 	writel_relaxed(irq_mask, pmic_arb->ver_ops->irq_clear(bus, apid));
+ }
+ 
+@@ -742,6 +743,7 @@ static int periph_interrupt(struct spmi_pmic_arb_bus *bus, u16 apid)
+ 				       spec_to_hwirq(sid, per, id, apid));
+ 		if (irq == 0) {
+ 			cleanup_irq(bus, apid, id);
++			handled++;
+ 			continue;
+ 		}
+ 		generic_handle_irq(irq);
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,0 +1,49 @@
+# OS / Editor
+.DS_Store
+__pycache__/
+*.pyc
+*.bak
+
+# Large device dumps, proprietary firmware & cold backups (NEVER commit)
+02_官方原厂镜像_*/
+02_阶段零_分区冷备与固件/
+03_定制内核与打包工具/
+04_必备APK安装包/
+06_Linux系统镜像包/
+07_主线Linux移植_阶段零取证/
+
+# Nested git repos & build artifacts
+kernel/linux/
+kernel/out/
+kernel/firmware/
+kernel/audioreach-topology/
+dualboot/build/
+dualboot/out/
+dualboot/sheng_devauth/
+rootfs/out/
+rootfs/qcom-va-driver/
+
+# Large binaries, archives, images, proprietary blobs
+*.img
+*.apk
+*.idsig
+*.exe
+*.zip
+*.tar.gz
+*.tar.xz
+*.tar.zst
+*.squashfs
+*.deb
+*.ko
+*.mbn
+*.mdt
+*.b0*
+*.tlv
+*.bin
+*.keystore
+
+# Legacy HyperOS/VM experiments & private device property dumps (local only)
+docs/legacy/
+docs/HANDOFF.md
+docs/device-info/device_props_*.txt
+docs/device-info/*.gz

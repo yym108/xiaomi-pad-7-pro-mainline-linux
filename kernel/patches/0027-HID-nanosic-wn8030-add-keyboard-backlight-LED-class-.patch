@@ -1,0 +1,161 @@
+From 61c60252ca673063df477380d4792ddd5993621b Mon Sep 17 00:00:00 2001
+From: yym <183073514+yym108@users.noreply.github.com>
+Date: Sun, 22 Nov 2026 18:43:37 +0800
+Subject: [PATCH 27/28] HID: nanosic-wn8030: add keyboard backlight LED class
+ and consumer control reports
+
+---
+ drivers/hid/hid-nanosic-wn8030.c | 72 +++++++++++++++++++++++++++++++-
+ 1 file changed, 70 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/hid/hid-nanosic-wn8030.c b/drivers/hid/hid-nanosic-wn8030.c
+index c0783d903..81e044322 100644
+--- a/drivers/hid/hid-nanosic-wn8030.c
++++ b/drivers/hid/hid-nanosic-wn8030.c
+@@ -12,6 +12,7 @@
+ #include <linux/i2c.h>
+ #include <linux/interrupt.h>
+ #include <linux/kernel.h>
++#include <linux/leds.h>
+ #include <linux/miscdevice.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
+@@ -51,6 +52,9 @@ struct nanosic_wn8030 {
+ 	bool uses_ram_fw;
+ 	bool irq_requested;
+ 
++	struct led_classdev kbd_backlight;
++	u8 kbd_brightness;
++
+ 	/* Authentication */
+ 	struct miscdevice auth_misc;
+ 	wait_queue_head_t auth_read_wq;
+@@ -150,6 +154,19 @@ static u8 hid_keyboard_descriptor[] = {
+ 	0x2A, 0xA4, 0x00,  //   Usage Maximum (0xA4)
+ 	0x81, 0x00,        //   Input (Data,Array,Abs,No Wrap,Linear,Preferred State,No Null Position)
+ 	0xC0,              // End Collection
++
++	0x05, 0x0C,        // Usage Page (Consumer)
++	0x09, 0x01,        // Usage (Consumer Control)
++	0xA1, 0x01,        // Collection (Application)
++	0x85, 0x06,        //   Report ID (6)
++	0x19, 0x00,        //   Usage Minimum (Unassigned)
++	0x2A, 0xFF, 0x02,  //   Usage Maximum (0x02FF)
++	0x15, 0x00,        //   Logical Minimum (0)
++	0x26, 0xFF, 0x02,  //   Logical Maximum (767)
++	0x75, 0x10,        //   Report Size (16)
++	0x95, 0x01,        //   Report Count (1)
++	0x81, 0x00,        //   Input (Data,Array,Abs,No Wrap,Linear,Preferred State,No Null Position)
++	0xC0,              // End Collection
+ };
+ 
+ static u8 hid_touchpad_descriptor[] = {
+@@ -367,6 +384,37 @@ static int nanosic_wn8030_set_touchpad(struct nanosic_wn8030 *nanosic, bool enab
+ 	return regmap_bulk_write(nanosic->regmap, 0x5c, buf, sizeof(buf));
+ }
+ 
++static int nanosic_wn8030_set_backlight(struct nanosic_wn8030 *nanosic, u8 brightness)
++{
++	u8 buf[XM_WN8030_I2C_WRITE] = { 0x32, 0x00, 0x4E, 0x31,
++					0x80, 0x38, 0x23, 0x01 };
++
++	if (brightness > 100)
++		brightness = 100;
++
++	buf[8] = brightness;
++	buf[9] = nanosic_wn8030_checksum8(&buf[2], 7);
++
++	return regmap_bulk_write(nanosic->regmap, 0x5c, buf, sizeof(buf));
++}
++
++static int nanosic_wn8030_kbd_backlight_set(struct led_classdev *led_cdev,
++					    enum led_brightness brightness)
++{
++	struct nanosic_wn8030 *nanosic =
++		container_of(led_cdev, struct nanosic_wn8030, kbd_backlight);
++	u8 level = min_t(unsigned int, brightness, 100);
++	int ret = 0;
++
++	mutex_lock(&nanosic->conn_mutex);
++	nanosic->kbd_brightness = level;
++	if (nanosic->keyboard_attached && !nanosic->suspended)
++		ret = nanosic_wn8030_set_backlight(nanosic, level);
++	mutex_unlock(&nanosic->conn_mutex);
++
++	return ret;
++}
++
+ static int nanosic_wn8030_set_kb_power(struct nanosic_wn8030 *nanosic, bool enable)
+ {
+ 	u8 buf[XM_WN8030_I2C_WRITE] = { 0x32, 0x00, 0x4E, 0x31,
+@@ -521,12 +569,14 @@ static void nanosic_wn8030_handle_vendor(struct nanosic_wn8030 *nanosic, u8 *buf
+ 				/* Caps LED state saved between reconnects by WN8030 */
+ 				nanosic_wn8030_set_caps_led(nanosic, false);
+ 				nanosic_wn8030_set_touchpad(nanosic, true);
++				nanosic_wn8030_set_backlight(nanosic, nanosic->kbd_brightness);
+ 				nanosic_wn8030_add_keyboard_hid(nanosic);
+ 				nanosic_wn8030_add_touchpad_hid(nanosic);
+ 				nanosic->keyboard_attached = true;
+ 			} else {
+-				/* Re-enable touchpad if MCU re-announces after resume */
++				/* Re-enable touchpad & backlight if MCU re-announces after resume */
+ 				nanosic_wn8030_set_touchpad(nanosic, true);
++				nanosic_wn8030_set_backlight(nanosic, nanosic->kbd_brightness);
+ 			}
+ 			mod_delayed_work(system_wq, &nanosic->wake_worker,
+ 					 msecs_to_jiffies(12000));
+@@ -608,6 +658,11 @@ static irqreturn_t nanosic_wn8030_handler(int irq, void *data)
+ 			hid_input_report(nanosic->hid_keyboard, HID_INPUT_REPORT,
+ 					 &buf[3], 9, 0);
+ 		break;
++	case 0x6:
++		if (nanosic->hid_keyboard)
++			hid_input_report(nanosic->hid_keyboard, HID_INPUT_REPORT,
++					 &buf[3], 3, 0);
++		break;
+ 	case 0x19:
+ 		if (nanosic->hid_touchpad)
+ 			hid_input_report(nanosic->hid_touchpad, HID_INPUT_REPORT,
+@@ -1056,6 +1111,15 @@ static int nanosic_wn8030_probe(struct i2c_client *client)
+ 		return ret;
+ 	}
+ 
++	nanosic->kbd_brightness = 50;
++	nanosic->kbd_backlight.name = "nanosic::kbd_backlight";
++	nanosic->kbd_backlight.max_brightness = 100;
++	nanosic->kbd_backlight.brightness = nanosic->kbd_brightness;
++	nanosic->kbd_backlight.brightness_set_blocking = nanosic_wn8030_kbd_backlight_set;
++	ret = devm_led_classdev_register(nanosic->dev, &nanosic->kbd_backlight);
++	if (ret)
++		dev_warn(nanosic->dev, "failed to register kbd_backlight led: %d\n", ret);
++
+ 	schedule_delayed_work(&nanosic->init_worker, msecs_to_jiffies(3000));
+ 	return 0;
+ }
+@@ -1105,11 +1169,12 @@ static int nanosic_wn8030_resume(struct device *dev)
+ 		}
+ 	}
+ 
+-	/* Wake up keyboard and re-enable touchpad/keep-alive after MCU exits sleep */
++	/* Wake up keyboard and re-enable touchpad/backlight/keep-alive after MCU exits sleep */
+ 	nanosic_wn8030_set_kb_power(nanosic, true);
+ 	if (nanosic->keyboard_attached) {
+ 		msleep(20);
+ 		nanosic_wn8030_set_touchpad(nanosic, true);
++		nanosic_wn8030_set_backlight(nanosic, nanosic->kbd_brightness);
+ 		mod_delayed_work(system_wq, &nanosic->wake_worker,
+ 				 msecs_to_jiffies(12000));
+ 	}
+@@ -1124,6 +1189,9 @@ static int nanosic_wn8030_suspend(struct device *dev)
+ 	if (!nanosic->irq_requested)
+ 		return 0;
+ 
++	if (nanosic->keyboard_attached)
++		nanosic_wn8030_set_backlight(nanosic, 0);
++
+ 	disable_irq(nanosic->client->irq);
+ 	cancel_delayed_work_sync(&nanosic->wake_worker);
+ 
+-- 
+2.54.0 (Apple Git-157)
+

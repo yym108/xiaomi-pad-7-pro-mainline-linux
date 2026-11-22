@@ -1,0 +1,26 @@
+From d937d9fba3dd7b10f91d0781b7458582f3a42f37 Mon Sep 17 00:00:00 2001
+From: yym <183073514+yym108@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 16:28:13 +0800
+Subject: [PATCH 10/28] drm/msm/a6xx: default Adreno 735 speedbin to 0 when
+ fuse is absent
+
+---
+ drivers/gpu/drm/msm/adreno/a6xx_gpu.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/drivers/gpu/drm/msm/adreno/a6xx_gpu.c b/drivers/gpu/drm/msm/adreno/a6xx_gpu.c
+index 6bb3b02c5..5beaf29f1 100644
+--- a/drivers/gpu/drm/msm/adreno/a6xx_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/a6xx_gpu.c
+@@ -2761,6 +2761,8 @@ static struct msm_gpu *a6xx_gpu_init(struct drm_device *dev)
+ 	if (a6xx_read_speedbin(&pdev->dev, a6xx_gpu, info, &speedbin) || !speedbin)
+ 		speedbin = 0xffff;
+ 	adreno_gpu->speedbin = (uint16_t) (0xffff & speedbin);
++	if (adreno_is_a735(adreno_gpu) && adreno_gpu->speedbin == 0xffff)
++		adreno_gpu->speedbin = 0;
+ 
+ 	/*
+ 	 * For now only clamp to idle freq for devices where this is known not
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,0 +1,107 @@
+From 6331e82134691fd1bd816f198fe632c33e3e6de2 Mon Sep 17 00:00:00 2001
+From: yym <183073514+yym108@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 18:58:49 +0800
+Subject: [PATCH 16/28] drm/msm/dp & typec/wcd939x: enable DP AltMode SBU AUX
+ and fix double link training
+
+1. Connect pmic_glink_sbu (port@2) to wcd_usbss_sbu_mux in sm8635-xiaomi-muyu.dts
+   so DisplayPort AUX is routed over Type-C SBU lines.
+2. In wcd939x_usbss_set(), skip the 35us D+/D- switch-off glitch when already
+   in USB-only mode so USB Gadget stays connected on boot.
+3. In msm_dp_display_prepare_link(), remove redundant force_link_train = true
+   right before msm_dp_ctrl_on_link(), which otherwise triggered a broken
+   second link retrain in msm_dp_ctrl_prepare_stream_on() immediately after
+   LT1+LT2 succeeded (77 77 81).
+---
+ .../boot/dts/qcom/sm8635-xiaomi-muyu.dts      |  9 +++++
+ drivers/gpu/drm/msm/dp/dp_display.c           |  1 -
+ drivers/usb/typec/mux/wcd939x-usbss.c         | 34 +++++++++++++++++++
+ 3 files changed, 43 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts b/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
+index 56c91462f..f4f8c196e 100644
+--- a/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
++++ b/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
+@@ -817,6 +817,14 @@ pmic_glink_ss_in: endpoint {
+ 						remote-endpoint = <&usb_dp_qmpphy_out>;
+ 					};
+ 				};
++
++				port@2 {
++					reg = <2>;
++
++					pmic_glink_sbu: endpoint {
++						remote-endpoint = <&wcd_usbss_sbu_mux>;
++					};
++				};
+ 			};
+ 		};
+ 	};
+@@ -2181,6 +2189,7 @@ port@0 {
+ 							reg = <0>;
+ 
+ 							wcd_usbss_sbu_mux: endpoint {
++								remote-endpoint = <&pmic_glink_sbu>;
+ 							};
+ 						};
+ 					};
+diff --git a/drivers/gpu/drm/msm/dp/dp_display.c b/drivers/gpu/drm/msm/dp/dp_display.c
+index c0c150e2c..70ad6f209 100644
+--- a/drivers/gpu/drm/msm/dp/dp_display.c
++++ b/drivers/gpu/drm/msm/dp/dp_display.c
+@@ -651,7 +651,6 @@ static int msm_dp_display_prepare_link(struct msm_dp_display_private *dp)
+ 
+ 	if (!msm_dp_display->power_on) {
+ 		msm_dp_display_host_phy_init(dp);
+-		force_link_train = true;
+ 	}
+ 
+ 	rc = msm_dp_ctrl_on_link(dp->ctrl, dp->panel);
+diff --git a/drivers/usb/typec/mux/wcd939x-usbss.c b/drivers/usb/typec/mux/wcd939x-usbss.c
+index ca806041a..960d0b568 100644
+--- a/drivers/usb/typec/mux/wcd939x-usbss.c
++++ b/drivers/usb/typec/mux/wcd939x-usbss.c
+@@ -274,6 +274,40 @@ static int wcd939x_usbss_set(struct wcd939x_usbss *usbss)
+ 		return -EOPNOTSUPP;
+ 	}
+ 
++	/*
++	 * In USB-only mode, avoid toggling D+/D- off for 35us when they are
++	 * already routed to USB DP/DN with no DP AUX or audio switches active.
++	 * Otherwise an active USB Gadget session disconnects during init.
++	 */
++	if (enable_usb && !enable_dp && !enable_audio) {
++		unsigned int en_val = 0, sel_val = 0;
++		const unsigned int usb_en_mask =
++			WCD_USBSS_SWITCH_SETTINGS_ENABLE_DP_AUXP_TO_MGX_SWITCHES |
++			WCD_USBSS_SWITCH_SETTINGS_ENABLE_DP_AUXM_TO_MGX_SWITCHES |
++			WCD_USBSS_SWITCH_SETTINGS_ENABLE_DPR_SWITCHES |
++			WCD_USBSS_SWITCH_SETTINGS_ENABLE_DNL_SWITCHES |
++			WCD_USBSS_SWITCH_SETTINGS_ENABLE_SENSE_SWITCHES |
++			WCD_USBSS_SWITCH_SETTINGS_ENABLE_MIC_SWITCHES |
++			WCD_USBSS_SWITCH_SETTINGS_ENABLE_AGND_SWITCHES;
++		const unsigned int usb_en_want =
++			WCD_USBSS_SWITCH_SETTINGS_ENABLE_DPR_SWITCHES |
++			WCD_USBSS_SWITCH_SETTINGS_ENABLE_DNL_SWITCHES;
++		const unsigned int usb_sel_mask =
++			WCD_USBSS_SWITCH_SELECT0_DPR_SWITCHES |
++			WCD_USBSS_SWITCH_SELECT0_DNL_SWITCHES;
++		const unsigned int usb_sel_want =
++			FIELD_PREP(WCD_USBSS_SWITCH_SELECT0_DNL_SWITCHES,
++				   WCD_USBSS_SWITCH_SELECT0_DNL_SWITCH_DN) |
++			FIELD_PREP(WCD_USBSS_SWITCH_SELECT0_DPR_SWITCHES,
++				   WCD_USBSS_SWITCH_SELECT0_DPR_SWITCH_DP);
++
++		if (!regmap_read(usbss->regmap, WCD_USBSS_SWITCH_SETTINGS_ENABLE, &en_val) &&
++		    !regmap_read(usbss->regmap, WCD_USBSS_SWITCH_SELECT0, &sel_val) &&
++		    (en_val & usb_en_mask) == usb_en_want &&
++		    (sel_val & usb_sel_mask) == usb_sel_want)
++			return 0;
++	}
++
+ 	/* Disable all switches */
+ 	ret = regmap_clear_bits(usbss->regmap, WCD_USBSS_SWITCH_SETTINGS_ENABLE,
+ 				WCD_USBSS_SWITCH_SETTINGS_ENABLE_DP_AUXP_TO_MGX_SWITCHES |
+-- 
+2.54.0 (Apple Git-157)
+

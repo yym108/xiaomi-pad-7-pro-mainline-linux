@@ -1,0 +1,103 @@
+From a3371570896dc3c96f900e951a0dc9b20cef8083 Mon Sep 17 00:00:00 2001
+From: yym <183073514+yym108@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 18:00:09 +0800
+Subject: [PATCH 15/28] media: qcom: iris: add native SM8635 (VPU3.0 2-pipe)
+ platform data
+
+---
+ .../boot/dts/qcom/sm8635-xiaomi-muyu.dts      |  2 +-
+ .../platform/qcom/iris/iris_platform_common.h |  1 +
+ .../platform/qcom/iris/iris_platform_vpu3x.c  | 36 +++++++++++++++++++
+ drivers/media/platform/qcom/iris/iris_probe.c |  4 +++
+ 4 files changed, 42 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts b/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
+index 0a0a01e19..56c91462f 100644
+--- a/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
++++ b/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
+@@ -1411,7 +1411,7 @@ dispcc: clock-controller@af00000 {
+ 		};
+ 
+ 		iris: video-codec@aa00000 {
+-			compatible = "qcom,sm8650-iris";
++			compatible = "qcom,sm8635-iris";
+ 			reg = <0x0 0x0aa00000 0x0 0xf0000>;
+ 			interrupts = <GIC_SPI 174 IRQ_TYPE_LEVEL_HIGH>;
+ 			firmware-name = "vpu30_2v.mbn";
+diff --git a/drivers/media/platform/qcom/iris/iris_platform_common.h b/drivers/media/platform/qcom/iris/iris_platform_common.h
+index cddab9a9c..b2d0fd582 100644
+--- a/drivers/media/platform/qcom/iris/iris_platform_common.h
++++ b/drivers/media/platform/qcom/iris/iris_platform_common.h
+@@ -68,6 +68,7 @@ extern const struct iris_platform_data qcs8300_data;
+ extern const struct iris_platform_data sc7280_data;
+ extern const struct iris_platform_data sm8250_data;
+ extern const struct iris_platform_data sm8550_data;
++extern const struct iris_platform_data sm8635_data;
+ extern const struct iris_platform_data sm8650_data;
+ extern const struct iris_platform_data sm8750_data;
+ extern const struct iris_platform_data x1p42100_data;
+diff --git a/drivers/media/platform/qcom/iris/iris_platform_vpu3x.c b/drivers/media/platform/qcom/iris/iris_platform_vpu3x.c
+index e963cb116..2596849b4 100644
+--- a/drivers/media/platform/qcom/iris/iris_platform_vpu3x.c
++++ b/drivers/media/platform/qcom/iris/iris_platform_vpu3x.c
+@@ -155,6 +155,42 @@ const struct iris_platform_data sm8550_data = {
+ 	.max_core_mbps = ((7680 * 4320) / 256) * 60,
+ };
+ 
++/*
++ * SM8635 (cliffs) uses VPU 3.0 with 2 VPP pipes (vpu30_2v.mbn), so it must use
++ * VPU3.0 power-off ops (iris_vpu3_ops) instead of SM8650 VPU3.3 MVP NoC ops.
++ */
++const struct iris_platform_data sm8635_data = {
++	.firmware_desc_gen2 = &iris_vpu30_p4_gen2_desc,
++	.vpu_ops = &iris_vpu3_ops,
++	.icc_tbl = iris_icc_info_vpu3x,
++	.icc_tbl_size = ARRAY_SIZE(iris_icc_info_vpu3x),
++	.clk_rst_tbl = sm8550_clk_reset_table,
++	.clk_rst_tbl_size = ARRAY_SIZE(sm8550_clk_reset_table),
++	.bw_tbl_dec = iris_bw_table_dec_vpu3x,
++	.bw_tbl_dec_size = ARRAY_SIZE(iris_bw_table_dec_vpu3x),
++	.pmdomain_tbl = iris_pmdomain_table_vpu3x,
++	.pmdomain_tbl_size = ARRAY_SIZE(iris_pmdomain_table_vpu3x),
++	.opp_pd_tbl = iris_opp_pd_table_vpu3x,
++	.opp_pd_tbl_size = ARRAY_SIZE(iris_opp_pd_table_vpu3x),
++	.clk_tbl = sm8550_clk_table,
++	.clk_tbl_size = ARRAY_SIZE(sm8550_clk_table),
++	.opp_clk_tbl = iris_opp_clk_table_vpu3x,
++	/* Upper bound of DMA address range */
++	.dma_mask = 0xe0000000 - 1,
++	.inst_iris_fmts = iris_fmts_vpu3x_dec,
++	.inst_iris_fmts_size = ARRAY_SIZE(iris_fmts_vpu3x_dec),
++	.inst_caps = &platform_inst_cap_sm8550,
++	.slice_caps = &iris_vpu2_vpu3x_slice_caps,
++	.tz_cp_config_data = tz_cp_config_vpu3,
++	.tz_cp_config_data_size = ARRAY_SIZE(tz_cp_config_vpu3),
++	.num_vpp_pipe = 2,
++	.wd_intr_mask = WRAPPER_INTR_STATUS_A2HWD_BMSK,
++	.icc_ib_multiplier = 1,
++	.max_session_count = 16,
++	.max_core_mbpf = ((4096 * 2176) / 256) * 4,
++	.max_core_mbps = (((3840 * 2176) / 256) * 120),
++};
++
+ /*
+  * Shares most of SM8550 data except:
+  * - vpu_ops to iris_vpu33_ops
+diff --git a/drivers/media/platform/qcom/iris/iris_probe.c b/drivers/media/platform/qcom/iris/iris_probe.c
+index 343e44c6b..9145c9a51 100644
+--- a/drivers/media/platform/qcom/iris/iris_probe.c
++++ b/drivers/media/platform/qcom/iris/iris_probe.c
+@@ -442,6 +442,10 @@ static const struct of_device_id iris_dt_match[] = {
+ 		.compatible = "qcom,sm8550-iris",
+ 		.data = &sm8550_data,
+ 	},
++	{
++		.compatible = "qcom,sm8635-iris",
++		.data = &sm8635_data,
++	},
+ 	{
+ 		.compatible = "qcom,sm8650-iris",
+ 		.data = &sm8650_data,
+-- 
+2.54.0 (Apple Git-157)
+

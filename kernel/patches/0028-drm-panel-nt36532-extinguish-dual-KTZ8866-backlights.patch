@@ -1,0 +1,120 @@
+From efc1256a61a4eb2d3d7777284c4fad9b69229530 Mon Sep 17 00:00:00 2001
+From: yym <183073514+yym108@users.noreply.github.com>
+Date: Sun, 22 Nov 2026 19:12:24 +0800
+Subject: [PATCH 28/28] drm/panel: nt36532: extinguish dual KTZ8866 backlights
+ before blank/shutdown to prevent garbled flash
+
+---
+ .../boot/dts/qcom/sm8635-xiaomi-muyu.dts      |  1 +
+ drivers/gpu/drm/panel/panel-novatek-nt36532.c | 47 +++++++++++++++++++
+ drivers/video/backlight/ktz8866.c             |  1 +
+ 3 files changed, 49 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts b/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
+index d99c23237..98a4d0495 100644
+--- a/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
++++ b/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
+@@ -3165,6 +3165,7 @@ panel0: panel@0 {
+ 					pinctrl-names = "default", "sleep";
+ 					vddio-supply = <&vreg_l8b_1p9>;
+ 					backlight = <&backlight>;
++					backlight-sec = <&backlight_sec>;
+ 					reset-gpios = <&tlmm 2 GPIO_ACTIVE_LOW>;
+ 
+ 					ports {
+diff --git a/drivers/gpu/drm/panel/panel-novatek-nt36532.c b/drivers/gpu/drm/panel/panel-novatek-nt36532.c
+index 0eeb4eca3..b761baada 100644
+--- a/drivers/gpu/drm/panel/panel-novatek-nt36532.c
++++ b/drivers/gpu/drm/panel/panel-novatek-nt36532.c
+@@ -6,6 +6,7 @@
+  * Copyright (c) 2025, 2026 Junjie Cao <junjie.cao@linux.dev>
+  */
+ 
++#include <linux/backlight.h>
+ #include <linux/delay.h>
+ #include <linux/device-id/of.h>
+ #include <linux/gpio/consumer.h>
+@@ -30,6 +31,7 @@ struct nt36532 {
+ 	struct drm_dsc_config dsc;
+ 	struct gpio_desc *reset_gpio;
+ 	struct regulator_bulk_data *supplies;
++	struct backlight_device *backlight_sec;
+ };
+ 
+ struct panel_info {
+@@ -133,8 +135,36 @@ static int nt36532_get_modes(struct drm_panel *panel,
+ 						    &panel_info->display_mode);
+ }
+ 
++static int nt36532_enable(struct drm_panel *panel)
++{
++	struct nt36532 *ctx = to_nt36532(panel);
++
++	/* Wait for valid DSI video frames before lighting backlights */
++	msleep(20);
++	if (ctx->backlight_sec)
++		backlight_enable(ctx->backlight_sec);
++
++	return 0;
++}
++
++static int nt36532_disable(struct drm_panel *panel)
++{
++	struct nt36532 *ctx = to_nt36532(panel);
++
++	/* Extinguish both backlights before DSI video stops and panel resets */
++	if (panel->backlight)
++		backlight_disable(panel->backlight);
++	if (ctx->backlight_sec)
++		backlight_disable(ctx->backlight_sec);
++	msleep(25);
++
++	return 0;
++}
++
+ static const struct drm_panel_funcs nt36532_panel_funcs = {
+ 	.prepare = nt36532_prepare,
++	.enable = nt36532_enable,
++	.disable = nt36532_disable,
+ 	.unprepare = nt36532_unprepare,
+ 	.get_modes = nt36532_get_modes,
+ };
+@@ -381,6 +411,23 @@ static int nt36532_probe(struct mipi_dsi_device *dsi)
+ 	if (ret)
+ 		return dev_err_probe(dev, ret, "Failed to get backlight\n");
+ 
++	{
++		struct device_node *bl_sec_np;
++
++		bl_sec_np = of_parse_phandle(dev->of_node, "backlight-sec", 0);
++		if (bl_sec_np) {
++			ctx->backlight_sec = of_find_backlight_by_node(bl_sec_np);
++			of_node_put(bl_sec_np);
++			if (!ctx->backlight_sec)
++				return -EPROBE_DEFER;
++			ret = devm_add_action_or_reset(dev,
++						       (void (*)(void *))put_device,
++						       &ctx->backlight_sec->dev);
++			if (ret)
++				return ret;
++		}
++	}
++
+ 	ret = devm_drm_panel_add(dev, &ctx->panel);
+ 	if (ret < 0)
+ 		return dev_err_probe(dev, ret, "failed to add panel\n");
+diff --git a/drivers/video/backlight/ktz8866.c b/drivers/video/backlight/ktz8866.c
+index 8cb60f43b..1cebe8744 100644
+--- a/drivers/video/backlight/ktz8866.c
++++ b/drivers/video/backlight/ktz8866.c
+@@ -202,6 +202,7 @@ static struct i2c_driver ktz8866_driver = {
+ 	},
+ 	.probe = ktz8866_probe,
+ 	.remove = ktz8866_remove,
++	.shutdown = ktz8866_remove,
+ 	.id_table = ktz8866_ids,
+ };
+ 
+-- 
+2.54.0 (Apple Git-157)
+

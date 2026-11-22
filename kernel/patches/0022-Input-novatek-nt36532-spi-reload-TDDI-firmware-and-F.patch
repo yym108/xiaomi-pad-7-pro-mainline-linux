@@ -1,0 +1,124 @@
+From f48adbcc3f26c76b32c407e7de4691b3cea30cf8 Mon Sep 17 00:00:00 2001
+From: yym <183073514+yym108@users.noreply.github.com>
+Date: Sun, 22 Nov 2026 12:35:32 +0800
+Subject: [PATCH 22/28] Input: novatek-nt36532-spi - reload TDDI firmware and
+ Focus Pen mode on resume
+
+---
+ .../input/touchscreen/novatek-nt36532-spi.c   | 63 +++++++++++++++++--
+ 1 file changed, 57 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/input/touchscreen/novatek-nt36532-spi.c b/drivers/input/touchscreen/novatek-nt36532-spi.c
+index 6dc2e780f..600d04e48 100644
+--- a/drivers/input/touchscreen/novatek-nt36532-spi.c
++++ b/drivers/input/touchscreen/novatek-nt36532-spi.c
+@@ -90,6 +90,7 @@ struct nvt_nt36532_ts {
+ 	s16 diff[NVT_NUM_NODES];
+ 	int base_frames;
+ 	bool base_ready;
++	bool irq_requested;
+ 	bool was_touching;
+ 	bool pen_active;
+ 	bool pen_touching;
+@@ -763,9 +764,15 @@ static void nvt_init_work(struct work_struct *work)
+ 	u8 fw_info[24] = { 0 };
+ 	int ret;
+ 
++	mutex_lock(&ts->lock);
++	ts->base_ready = false;
++	ts->base_frames = 0;
++	memset(ts->base_sum, 0, sizeof(ts->base_sum));
++
+ 	ret = request_firmware(&fw, ts->fw_name, &spi->dev);
+ 	if (ret) {
+ 		dev_err(&spi->dev, "request_firmware(%s) failed: %d\n", ts->fw_name, ret);
++		mutex_unlock(&ts->lock);
+ 		return;
+ 	}
+ 
+@@ -773,6 +780,7 @@ static void nvt_init_work(struct work_struct *work)
+ 	release_firmware(fw);
+ 	if (ret) {
+ 		dev_err(&spi->dev, "firmware download failed: %d\n", ret);
++		mutex_unlock(&ts->lock);
+ 		return;
+ 	}
+ 
+@@ -790,13 +798,20 @@ static void nvt_init_work(struct work_struct *work)
+ 		dev_warn(&spi->dev, "failed to enable Focus Pen mode: %d\n", ret);
+ 	else
+ 		msleep(20);
++	mutex_unlock(&ts->lock);
+ 
+-	ret = devm_request_threaded_irq(&spi->dev, spi->irq, NULL,
+-					nvt_nt36532_irq_handler,
+-					IRQF_TRIGGER_RISING | IRQF_ONESHOT,
+-					dev_name(&spi->dev), ts);
+-	if (ret)
+-		dev_err(&spi->dev, "request_irq(%d) failed: %d\n", spi->irq, ret);
++	if (!ts->irq_requested) {
++		ret = devm_request_threaded_irq(&spi->dev, spi->irq, NULL,
++						nvt_nt36532_irq_handler,
++						IRQF_TRIGGER_RISING | IRQF_ONESHOT,
++						dev_name(&spi->dev), ts);
++		if (ret)
++			dev_err(&spi->dev, "request_irq(%d) failed: %d\n", spi->irq, ret);
++		else
++			ts->irq_requested = true;
++	} else {
++		enable_irq(spi->irq);
++	}
+ }
+ 
+ static int nvt_nt36532_probe(struct spi_device *spi)
+@@ -962,11 +977,47 @@ static struct attribute *nvt_nt36532_attrs[] = {
+ };
+ ATTRIBUTE_GROUPS(nvt_nt36532);
+ 
++static int nvt_nt36532_suspend(struct device *dev)
++{
++	struct nvt_nt36532_ts *ts = dev_get_drvdata(dev);
++
++	cancel_delayed_work_sync(&ts->init_work);
++	if (ts->irq_requested)
++		disable_irq(ts->spi->irq);
++
++	mutex_lock(&ts->lock);
++	nvt_release_pen(ts);
++	if (ts->was_touching) {
++		struct input_mt_pos pos[NVT_MAX_TOUCHES];
++		int slots[NVT_MAX_TOUCHES];
++
++		input_mt_assign_slots(ts->input, slots, pos, 0, 0);
++		input_mt_sync_frame(ts->input);
++		input_sync(ts->input);
++		ts->was_touching = false;
++	}
++	mutex_unlock(&ts->lock);
++
++	return 0;
++}
++
++static int nvt_nt36532_resume(struct device *dev)
++{
++	struct nvt_nt36532_ts *ts = dev_get_drvdata(dev);
++
++	schedule_delayed_work(&ts->init_work, msecs_to_jiffies(300));
++	return 0;
++}
++
++static DEFINE_SIMPLE_DEV_PM_OPS(nvt_nt36532_pm_ops,
++				nvt_nt36532_suspend, nvt_nt36532_resume);
++
+ static struct spi_driver nvt_nt36532_driver = {
+ 	.driver = {
+ 		.name = "novatek-nt36532-spi",
+ 		.of_match_table = nvt_nt36532_of_match,
+ 		.dev_groups = nvt_nt36532_groups,
++		.pm = pm_sleep_ptr(&nvt_nt36532_pm_ops),
+ 	},
+ 	.id_table = nvt_nt36532_spi_id,
+ 	.probe = nvt_nt36532_probe,
+-- 
+2.54.0 (Apple Git-157)
+

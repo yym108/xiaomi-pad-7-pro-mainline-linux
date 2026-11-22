@@ -1,0 +1,4352 @@
+From d3f464906c149229501c86c443ced30e3dc3c6cc Mon Sep 17 00:00:00 2001
+From: yym <183073514+yym108@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 11:36:11 +0800
+Subject: [PATCH 01/28] soc: qcom: add SM8635 (cliffs) base clocks, pinctrl,
+ interconnect, LLCC and UBWC support
+
+---
+ drivers/clk/qcom/Makefile                     |    2 +
+ drivers/clk/qcom/dispcc-sm8550.c              |   22 +-
+ drivers/clk/qcom/gcc-sm8635.c                 | 1427 ++++++++++++++++
+ drivers/clk/qcom/videocc-sm8550.c             |   48 +-
+ drivers/interconnect/qcom/Makefile            |    2 +
+ drivers/interconnect/qcom/sm8635.c            | 1463 +++++++++++++++++
+ drivers/pinctrl/qcom/Makefile                 |    1 +
+ drivers/pinctrl/qcom/pinctrl-sm8635.c         |  817 +++++++++
+ drivers/soc/qcom/llcc-qcom.c                  |  161 ++
+ drivers/soc/qcom/qcom_pd_mapper.c             |    1 +
+ drivers/soc/qcom/socinfo.c                    |    4 +
+ drivers/soc/qcom/ubwc_config.c                |    1 +
+ include/dt-bindings/arm/qcom,ids.h            |    4 +
+ .../interconnect/qcom,sm8635-rpmh.h           |  159 ++
+ 14 files changed, 4108 insertions(+), 4 deletions(-)
+ create mode 100644 drivers/clk/qcom/gcc-sm8635.c
+ create mode 100644 drivers/interconnect/qcom/sm8635.c
+ create mode 100644 drivers/pinctrl/qcom/pinctrl-sm8635.c
+ create mode 100644 include/dt-bindings/interconnect/qcom,sm8635-rpmh.h
+
+diff --git a/drivers/clk/qcom/Makefile b/drivers/clk/qcom/Makefile
+index 6affb5073..5f6df21af 100644
+--- a/drivers/clk/qcom/Makefile
++++ b/drivers/clk/qcom/Makefile
+@@ -197,6 +197,7 @@ obj-$(CONFIG_SM_GCC_8250) += gcc-sm8250.o
+ obj-$(CONFIG_SM_GCC_8350) += gcc-sm8350.o
+ obj-$(CONFIG_SM_GCC_8450) += gcc-sm8450.o
+ obj-$(CONFIG_SM_GCC_8550) += gcc-sm8550.o
++obj-$(CONFIG_SM_GCC_8650) += gcc-sm8635.o
+ obj-$(CONFIG_SM_GCC_8650) += gcc-sm8650.o
+ obj-$(CONFIG_SM_GCC_8750) += gcc-sm8750.o
+ obj-$(CONFIG_SM_GCC_MILOS) += gcc-milos.o
+@@ -210,6 +211,7 @@ obj-$(CONFIG_SM_GPUCC_8250) += gpucc-sm8250.o
+ obj-$(CONFIG_SM_GPUCC_8350) += gpucc-sm8350.o
+ obj-$(CONFIG_SM_GPUCC_8450) += gpucc-sm8450.o
+ obj-$(CONFIG_SM_GPUCC_8550) += gpucc-sm8550.o
++obj-$(CONFIG_SM_GPUCC_8650) += gpucc-sm8635.o
+ obj-$(CONFIG_SM_GPUCC_8650) += gpucc-sm8650.o
+ obj-$(CONFIG_SM_GPUCC_8750) += gpucc-sm8750.o gxclkctl-kaanapali.o
+ obj-$(CONFIG_SM_GPUCC_MILOS) += gpucc-milos.o gxclkctl-kaanapali.o
+diff --git a/drivers/clk/qcom/dispcc-sm8550.c b/drivers/clk/qcom/dispcc-sm8550.c
+index 030fc7ef1..23c244e2f 100644
+--- a/drivers/clk/qcom/dispcc-sm8550.c
++++ b/drivers/clk/qcom/dispcc-sm8550.c
+@@ -611,6 +611,19 @@ static const struct freq_tbl ftbl_disp_cc_mdss_mdp_clk_src_sm8650[] = {
+ 	{ }
+ };
+ 
++static const struct freq_tbl ftbl_disp_cc_mdss_mdp_clk_src_sm8635[] = {
++	F(19200000, P_BI_TCXO, 1, 0, 0),
++	F(85714286, P_DISP_CC_PLL0_OUT_MAIN, 3, 0, 0),
++	F(100000000, P_DISP_CC_PLL0_OUT_MAIN, 3, 0, 0),
++	F(155000000, P_DISP_CC_PLL0_OUT_MAIN, 3, 0, 0),
++	F(200000000, P_DISP_CC_PLL0_OUT_MAIN, 3, 0, 0),
++	F(342000000, P_DISP_CC_PLL0_OUT_MAIN, 3, 0, 0),
++	F(402000000, P_DISP_CC_PLL0_OUT_MAIN, 3, 0, 0),
++	F(514000000, P_DISP_CC_PLL0_OUT_MAIN, 3, 0, 0),
++	F(600000000, P_DISP_CC_PLL0_OUT_MAIN, 3, 0, 0),
++	{ }
++};
++
+ static struct clk_rcg2 disp_cc_mdss_mdp_clk_src = {
+ 	.cmd_rcgr = 0x80d8,
+ 	.mnd_width = 0,
+@@ -1767,6 +1780,7 @@ static const struct qcom_cc_desc disp_cc_sm8550_desc = {
+ static const struct of_device_id disp_cc_sm8550_match_table[] = {
+ 	{ .compatible = "qcom,sar2130p-dispcc" },
+ 	{ .compatible = "qcom,sm8550-dispcc" },
++	{ .compatible = "qcom,sm8635-dispcc" },
+ 	{ .compatible = "qcom,sm8650-dispcc" },
+ 	{ }
+ };
+@@ -1791,9 +1805,13 @@ static int disp_cc_sm8550_probe(struct platform_device *pdev)
+ 		goto err_put_rpm;
+ 	}
+ 
+-	if (of_device_is_compatible(pdev->dev.of_node, "qcom,sm8650-dispcc")) {
++	if (of_device_is_compatible(pdev->dev.of_node, "qcom,sm8635-dispcc") ||
++	    of_device_is_compatible(pdev->dev.of_node, "qcom,sm8650-dispcc")) {
+ 		lucid_ole_vco[0].max_freq = 2100000000;
+-		disp_cc_mdss_mdp_clk_src.freq_tbl = ftbl_disp_cc_mdss_mdp_clk_src_sm8650;
++		disp_cc_mdss_mdp_clk_src.freq_tbl =
++			of_device_is_compatible(pdev->dev.of_node, "qcom,sm8635-dispcc") ?
++			ftbl_disp_cc_mdss_mdp_clk_src_sm8635 :
++			ftbl_disp_cc_mdss_mdp_clk_src_sm8650;
+ 		disp_cc_mdss_dptx1_usb_router_link_intf_clk.clkr.hw.init->parent_hws[0] =
+ 			&disp_cc_mdss_dptx1_link_div_clk_src.clkr.hw;
+ 	} else if (of_device_is_compatible(pdev->dev.of_node, "qcom,sar2130p-dispcc")) {
+diff --git a/drivers/clk/qcom/gcc-sm8635.c b/drivers/clk/qcom/gcc-sm8635.c
+new file mode 100644
+index 000000000..cc89dceae
+--- /dev/null
++++ b/drivers/clk/qcom/gcc-sm8635.c
+@@ -0,0 +1,1427 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Minimal Qualcomm SM8635 (cliffs) Global Clock Controller (GCC) driver
++ * for Xiaomi Pad 7 Pro (muyu) bring-up.
++ */
++
++#include <linux/clk-provider.h>
++#include <linux/module.h>
++#include <linux/platform_device.h>
++#include <linux/regmap.h>
++
++#include <dt-bindings/clock/qcom,sm8650-gcc.h>
++
++#include "clk-alpha-pll.h"
++#include "clk-branch.h"
++#include "clk-rcg.h"
++#include "clk-regmap.h"
++#include "clk-regmap-divider.h"
++#include "clk-regmap-mux.h"
++#include "clk-regmap-phy-mux.h"
++#include "common.h"
++#include "gdsc.h"
++#include "reset.h"
++
++enum {
++	DT_BI_TCXO,
++	DT_BI_TCXO_AO,
++	DT_SLEEP_CLK,
++	DT_UFS_PHY_RX_SYMBOL_0,
++	DT_UFS_PHY_RX_SYMBOL_1,
++	DT_UFS_PHY_TX_SYMBOL_0,
++	DT_PCIE_0_PIPE,
++};
++
++enum {
++	P_BI_TCXO,
++	P_GCC_GPLL0_OUT_EVEN,
++	P_GCC_GPLL0_OUT_MAIN,
++	P_GCC_GPLL4_OUT_MAIN,
++	P_SLEEP_CLK,
++	P_UFS_PHY_RX_SYMBOL_0_CLK,
++	P_UFS_PHY_RX_SYMBOL_1_CLK,
++	P_UFS_PHY_TX_SYMBOL_0_CLK,
++};
++
++static struct clk_alpha_pll gcc_gpll0 = {
++	.offset = 0x0,
++	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_LUCID_OLE],
++	.clkr = {
++		.enable_reg = 0x52020,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_gpll0",
++			.parent_data = &(const struct clk_parent_data) {
++				.index = DT_BI_TCXO,
++			},
++			.num_parents = 1,
++			.ops = &clk_alpha_pll_fixed_lucid_ole_ops,
++		},
++	},
++};
++
++static const struct clk_div_table post_div_table_gcc_gpll0_out_even[] = {
++	{ 0x1, 2 },
++	{ }
++};
++
++static struct clk_alpha_pll_postdiv gcc_gpll0_out_even = {
++	.offset = 0x0,
++	.post_div_shift = 10,
++	.num_post_div = ARRAY_SIZE(post_div_table_gcc_gpll0_out_even),
++	.post_div_table = post_div_table_gcc_gpll0_out_even,
++	.width = 4,
++	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_LUCID_OLE],
++	.clkr.hw.init = &(const struct clk_init_data) {
++		.name = "gcc_gpll0_out_even",
++		.parent_hws = (const struct clk_hw*[]) {
++			&gcc_gpll0.clkr.hw,
++		},
++		.num_parents = 1,
++		.ops = &clk_alpha_pll_postdiv_lucid_ole_ops,
++	},
++};
++
++static const struct parent_map gcc_parent_map_0[] = {
++	{ P_BI_TCXO, 0 },
++	{ P_GCC_GPLL0_OUT_MAIN, 1 },
++	{ P_GCC_GPLL0_OUT_EVEN, 6 },
++};
++
++static const struct clk_parent_data gcc_parent_data_0[] = {
++	{ .index = DT_BI_TCXO },
++	{ .hw = &gcc_gpll0.clkr.hw },
++	{ .hw = &gcc_gpll0_out_even.clkr.hw },
++};
++
++static const struct freq_tbl ftbl_gcc_usb30_prim_master_clk_src[] = {
++	F(66666667, P_GCC_GPLL0_OUT_EVEN, 4.5, 0, 0),
++	F(133333333, P_GCC_GPLL0_OUT_MAIN, 4.5, 0, 0),
++	F(200000000, P_GCC_GPLL0_OUT_MAIN, 3, 0, 0),
++	F(240000000, P_GCC_GPLL0_OUT_MAIN, 2.5, 0, 0),
++	{ }
++};
++
++static struct clk_rcg2 gcc_usb30_prim_master_clk_src = {
++	.cmd_rcgr = 0x3902c,
++	.mnd_width = 8,
++	.hid_width = 5,
++	.parent_map = gcc_parent_map_0,
++	.freq_tbl = ftbl_gcc_usb30_prim_master_clk_src,
++	.clkr.hw.init = &(const struct clk_init_data) {
++		.name = "gcc_usb30_prim_master_clk_src",
++		.parent_data = gcc_parent_data_0,
++		.num_parents = ARRAY_SIZE(gcc_parent_data_0),
++		.flags = CLK_SET_RATE_PARENT,
++		.ops = &clk_rcg2_shared_ops,
++	},
++};
++
++static const struct freq_tbl ftbl_gcc_usb30_prim_mock_utmi_clk_src[] = {
++	F(19200000, P_BI_TCXO, 1, 0, 0),
++	{ }
++};
++
++static struct clk_rcg2 gcc_usb30_prim_mock_utmi_clk_src = {
++	.cmd_rcgr = 0x39044,
++	.mnd_width = 0,
++	.hid_width = 5,
++	.parent_map = gcc_parent_map_0,
++	.freq_tbl = ftbl_gcc_usb30_prim_mock_utmi_clk_src,
++	.clkr.hw.init = &(const struct clk_init_data) {
++		.name = "gcc_usb30_prim_mock_utmi_clk_src",
++		.parent_data = gcc_parent_data_0,
++		.num_parents = ARRAY_SIZE(gcc_parent_data_0),
++		.ops = &clk_rcg2_ops,
++	},
++};
++
++static struct clk_regmap_div gcc_usb30_prim_mock_utmi_postdiv_clk_src = {
++	.reg = 0x3905c,
++	.shift = 0,
++	.width = 4,
++	.clkr.hw.init = &(const struct clk_init_data) {
++		.name = "gcc_usb30_prim_mock_utmi_postdiv_clk_src",
++		.parent_hws = (const struct clk_hw*[]) {
++			&gcc_usb30_prim_mock_utmi_clk_src.clkr.hw,
++		},
++		.num_parents = 1,
++		.flags = CLK_SET_RATE_PARENT,
++		.ops = &clk_regmap_div_ro_ops,
++	},
++};
++
++static struct clk_branch gcc_aggre_usb3_prim_axi_clk = {
++	.halt_reg = 0x3908c,
++	.halt_check = BRANCH_HALT_VOTED,
++	.hwcg_reg = 0x3908c,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x3908c,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_aggre_usb3_prim_axi_clk",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_usb30_prim_master_clk_src.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_cfg_noc_usb3_prim_axi_clk = {
++	.halt_reg = 0x39088,
++	.halt_check = BRANCH_HALT_VOTED,
++	.hwcg_reg = 0x39088,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x39088,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_cfg_noc_usb3_prim_axi_clk",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_usb30_prim_master_clk_src.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_usb30_prim_master_clk = {
++	.halt_reg = 0x39018,
++	.halt_check = BRANCH_HALT,
++	.clkr = {
++		.enable_reg = 0x39018,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_usb30_prim_master_clk",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_usb30_prim_master_clk_src.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_usb30_prim_mock_utmi_clk = {
++	.halt_reg = 0x39028,
++	.halt_check = BRANCH_HALT,
++	.clkr = {
++		.enable_reg = 0x39028,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_usb30_prim_mock_utmi_clk",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_usb30_prim_mock_utmi_postdiv_clk_src.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_usb30_prim_sleep_clk = {
++	.halt_reg = 0x39024,
++	.halt_check = BRANCH_HALT,
++	.clkr = {
++		.enable_reg = 0x39024,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_usb30_prim_sleep_clk",
++			.parent_data = &(const struct clk_parent_data) {
++				.index = DT_SLEEP_CLK,
++			},
++			.num_parents = 1,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_alpha_pll gcc_gpll4 = {
++	.offset = 0x4000,
++	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_LUCID_OLE],
++	.clkr = {
++		.enable_reg = 0x52020,
++		.enable_mask = BIT(4),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_gpll4",
++			.parent_data = &(const struct clk_parent_data) {
++				.index = DT_BI_TCXO,
++			},
++			.num_parents = 1,
++			.ops = &clk_alpha_pll_fixed_lucid_ole_ops,
++		},
++	},
++};
++
++static const struct parent_map gcc_parent_map_3[] = {
++	{ P_BI_TCXO, 0 },
++	{ P_GCC_GPLL0_OUT_MAIN, 1 },
++	{ P_GCC_GPLL4_OUT_MAIN, 5 },
++	{ P_GCC_GPLL0_OUT_EVEN, 6 },
++};
++
++static const struct clk_parent_data gcc_parent_data_3[] = {
++	{ .index = DT_BI_TCXO },
++	{ .hw = &gcc_gpll0.clkr.hw },
++	{ .hw = &gcc_gpll4.clkr.hw },
++	{ .hw = &gcc_gpll0_out_even.clkr.hw },
++};
++
++static const struct parent_map gcc_parent_map_4[] = {
++	{ P_BI_TCXO, 0 },
++	{ P_SLEEP_CLK, 5 },
++};
++
++static const struct clk_parent_data gcc_parent_data_4[] = {
++	{ .index = DT_BI_TCXO },
++	{ .index = DT_SLEEP_CLK },
++};
++
++static const struct parent_map gcc_parent_map_5[] = {
++	{ P_BI_TCXO, 0 },
++};
++
++static const struct clk_parent_data gcc_parent_data_5[] = {
++	{ .index = DT_BI_TCXO },
++};
++
++static const struct parent_map gcc_parent_map_12[] = {
++	{ P_UFS_PHY_RX_SYMBOL_0_CLK, 0 },
++	{ P_BI_TCXO, 2 },
++};
++
++static const struct clk_parent_data gcc_parent_data_12[] = {
++	{ .index = DT_UFS_PHY_RX_SYMBOL_0 },
++	{ .index = DT_BI_TCXO },
++};
++
++static const struct parent_map gcc_parent_map_13[] = {
++	{ P_UFS_PHY_RX_SYMBOL_1_CLK, 0 },
++	{ P_BI_TCXO, 2 },
++};
++
++static const struct clk_parent_data gcc_parent_data_13[] = {
++	{ .index = DT_UFS_PHY_RX_SYMBOL_1 },
++	{ .index = DT_BI_TCXO },
++};
++
++static const struct parent_map gcc_parent_map_14[] = {
++	{ P_UFS_PHY_TX_SYMBOL_0_CLK, 0 },
++	{ P_BI_TCXO, 2 },
++};
++
++static const struct clk_parent_data gcc_parent_data_14[] = {
++	{ .index = DT_UFS_PHY_TX_SYMBOL_0 },
++	{ .index = DT_BI_TCXO },
++};
++
++static struct clk_regmap_mux gcc_ufs_phy_rx_symbol_0_clk_src = {
++	.reg = 0x77064,
++	.shift = 0,
++	.width = 2,
++	.parent_map = gcc_parent_map_12,
++	.clkr = {
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_ufs_phy_rx_symbol_0_clk_src",
++			.parent_data = gcc_parent_data_12,
++			.num_parents = ARRAY_SIZE(gcc_parent_data_12),
++			.ops = &clk_regmap_mux_closest_ops,
++		},
++	},
++};
++
++static struct clk_regmap_mux gcc_ufs_phy_rx_symbol_1_clk_src = {
++	.reg = 0x770e0,
++	.shift = 0,
++	.width = 2,
++	.parent_map = gcc_parent_map_13,
++	.clkr = {
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_ufs_phy_rx_symbol_1_clk_src",
++			.parent_data = gcc_parent_data_13,
++			.num_parents = ARRAY_SIZE(gcc_parent_data_13),
++			.ops = &clk_regmap_mux_closest_ops,
++		},
++	},
++};
++
++static struct clk_regmap_mux gcc_ufs_phy_tx_symbol_0_clk_src = {
++	.reg = 0x77054,
++	.shift = 0,
++	.width = 2,
++	.parent_map = gcc_parent_map_14,
++	.clkr = {
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_ufs_phy_tx_symbol_0_clk_src",
++			.parent_data = gcc_parent_data_14,
++			.num_parents = ARRAY_SIZE(gcc_parent_data_14),
++			.ops = &clk_regmap_mux_closest_ops,
++		},
++	},
++};
++
++static const struct freq_tbl ftbl_gcc_ufs_phy_axi_clk_src[] = {
++	F(25000000, P_GCC_GPLL0_OUT_EVEN, 12, 0, 0),
++	F(100000000, P_GCC_GPLL0_OUT_EVEN, 3, 0, 0),
++	F(201500000, P_GCC_GPLL4_OUT_MAIN, 4, 0, 0),
++	F(403000000, P_GCC_GPLL4_OUT_MAIN, 2, 0, 0),
++	{ }
++};
++
++static struct clk_rcg2 gcc_ufs_phy_axi_clk_src = {
++	.cmd_rcgr = 0x77030,
++	.mnd_width = 8,
++	.hid_width = 5,
++	.parent_map = gcc_parent_map_3,
++	.freq_tbl = ftbl_gcc_ufs_phy_axi_clk_src,
++	.clkr.hw.init = &(const struct clk_init_data) {
++		.name = "gcc_ufs_phy_axi_clk_src",
++		.parent_data = gcc_parent_data_3,
++		.num_parents = ARRAY_SIZE(gcc_parent_data_3),
++		.flags = CLK_SET_RATE_PARENT,
++		.ops = &clk_rcg2_shared_ops,
++	},
++};
++
++static const struct freq_tbl ftbl_gcc_ufs_phy_ice_core_clk_src[] = {
++	F(100000000, P_GCC_GPLL0_OUT_EVEN, 3, 0, 0),
++	F(201500000, P_GCC_GPLL4_OUT_MAIN, 4, 0, 0),
++	F(403000000, P_GCC_GPLL4_OUT_MAIN, 2, 0, 0),
++	{ }
++};
++
++static struct clk_rcg2 gcc_ufs_phy_ice_core_clk_src = {
++	.cmd_rcgr = 0x77080,
++	.mnd_width = 0,
++	.hid_width = 5,
++	.parent_map = gcc_parent_map_3,
++	.freq_tbl = ftbl_gcc_ufs_phy_ice_core_clk_src,
++	.clkr.hw.init = &(const struct clk_init_data) {
++		.name = "gcc_ufs_phy_ice_core_clk_src",
++		.parent_data = gcc_parent_data_3,
++		.num_parents = ARRAY_SIZE(gcc_parent_data_3),
++		.flags = CLK_SET_RATE_PARENT,
++		.ops = &clk_rcg2_shared_ops,
++	},
++};
++
++static const struct freq_tbl ftbl_gcc_ufs_phy_phy_aux_clk_src[] = {
++	F(9600000, P_BI_TCXO, 2, 0, 0),
++	F(19200000, P_BI_TCXO, 1, 0, 0),
++	{ }
++};
++
++static struct clk_rcg2 gcc_ufs_phy_phy_aux_clk_src = {
++	.cmd_rcgr = 0x770b4,
++	.mnd_width = 0,
++	.hid_width = 5,
++	.parent_map = gcc_parent_map_5,
++	.freq_tbl = ftbl_gcc_ufs_phy_phy_aux_clk_src,
++	.clkr.hw.init = &(const struct clk_init_data) {
++		.name = "gcc_ufs_phy_phy_aux_clk_src",
++		.parent_data = gcc_parent_data_5,
++		.num_parents = ARRAY_SIZE(gcc_parent_data_5),
++		.flags = CLK_SET_RATE_PARENT,
++		.ops = &clk_rcg2_shared_ops,
++	},
++};
++
++static struct clk_rcg2 gcc_ufs_phy_unipro_core_clk_src = {
++	.cmd_rcgr = 0x77098,
++	.mnd_width = 0,
++	.hid_width = 5,
++	.parent_map = gcc_parent_map_3,
++	.freq_tbl = ftbl_gcc_ufs_phy_ice_core_clk_src,
++	.clkr.hw.init = &(const struct clk_init_data) {
++		.name = "gcc_ufs_phy_unipro_core_clk_src",
++		.parent_data = gcc_parent_data_3,
++		.num_parents = ARRAY_SIZE(gcc_parent_data_3),
++		.flags = CLK_SET_RATE_PARENT,
++		.ops = &clk_rcg2_shared_ops,
++	},
++};
++
++static struct clk_branch gcc_aggre_ufs_phy_axi_clk = {
++	.halt_reg = 0x770e4,
++	.halt_check = BRANCH_HALT_VOTED,
++	.hwcg_reg = 0x770e4,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x770e4,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_aggre_ufs_phy_axi_clk",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_ufs_phy_axi_clk_src.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_ufs_phy_ahb_clk = {
++	.halt_reg = 0x77024,
++	.halt_check = BRANCH_HALT_VOTED,
++	.hwcg_reg = 0x77024,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x77024,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_ufs_phy_ahb_clk",
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_ufs_phy_axi_clk = {
++	.halt_reg = 0x77018,
++	.halt_check = BRANCH_HALT_VOTED,
++	.hwcg_reg = 0x77018,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x77018,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_ufs_phy_axi_clk",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_ufs_phy_axi_clk_src.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_ufs_phy_ice_core_clk = {
++	.halt_reg = 0x77074,
++	.halt_check = BRANCH_HALT_VOTED,
++	.hwcg_reg = 0x77074,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x77074,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_ufs_phy_ice_core_clk",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_ufs_phy_ice_core_clk_src.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_ufs_phy_phy_aux_clk = {
++	.halt_reg = 0x770b0,
++	.halt_check = BRANCH_HALT_VOTED,
++	.hwcg_reg = 0x770b0,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x770b0,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_ufs_phy_phy_aux_clk",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_ufs_phy_phy_aux_clk_src.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_ufs_phy_rx_symbol_0_clk = {
++	.halt_reg = 0x7702c,
++	.halt_check = BRANCH_HALT_DELAY,
++	.clkr = {
++		.enable_reg = 0x7702c,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_ufs_phy_rx_symbol_0_clk",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_ufs_phy_rx_symbol_0_clk_src.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_ufs_phy_rx_symbol_1_clk = {
++	.halt_reg = 0x770cc,
++	.halt_check = BRANCH_HALT_DELAY,
++	.clkr = {
++		.enable_reg = 0x770cc,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_ufs_phy_rx_symbol_1_clk",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_ufs_phy_rx_symbol_1_clk_src.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_ufs_phy_tx_symbol_0_clk = {
++	.halt_reg = 0x77028,
++	.halt_check = BRANCH_HALT_DELAY,
++	.clkr = {
++		.enable_reg = 0x77028,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_ufs_phy_tx_symbol_0_clk",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_ufs_phy_tx_symbol_0_clk_src.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_ufs_phy_unipro_core_clk = {
++	.halt_reg = 0x77068,
++	.halt_check = BRANCH_HALT_VOTED,
++	.hwcg_reg = 0x77068,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x77068,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_ufs_phy_unipro_core_clk",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_ufs_phy_unipro_core_clk_src.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static const struct freq_tbl ftbl_gcc_qupv3_se_clk_src[] = {
++	F(7372800, P_GCC_GPLL0_OUT_EVEN, 1, 384, 15625),
++	F(14745600, P_GCC_GPLL0_OUT_EVEN, 1, 768, 15625),
++	F(19200000, P_BI_TCXO, 1, 0, 0),
++	F(29491200, P_GCC_GPLL0_OUT_EVEN, 1, 1536, 15625),
++	F(32000000, P_GCC_GPLL0_OUT_EVEN, 1, 8, 75),
++	F(48000000, P_GCC_GPLL0_OUT_EVEN, 1, 4, 25),
++	F(51200000, P_GCC_GPLL0_OUT_EVEN, 1, 64, 375),
++	F(64000000, P_GCC_GPLL0_OUT_EVEN, 1, 16, 75),
++	F(75000000, P_GCC_GPLL0_OUT_EVEN, 4, 0, 0),
++	F(80000000, P_GCC_GPLL0_OUT_EVEN, 1, 4, 15),
++	F(96000000, P_GCC_GPLL0_OUT_EVEN, 1, 8, 25),
++	F(100000000, P_GCC_GPLL0_OUT_MAIN, 6, 0, 0),
++	F(102400000, P_GCC_GPLL0_OUT_EVEN, 1, 128, 375),
++	F(112000000, P_GCC_GPLL0_OUT_EVEN, 1, 28, 75),
++	F(117964800, P_GCC_GPLL0_OUT_EVEN, 1, 6144, 15625),
++	F(120000000, P_GCC_GPLL0_OUT_MAIN, 5, 0, 0),
++	{ }
++};
++
++static struct clk_rcg2 gcc_qupv3_wrap0_s0_clk_src = {
++	.cmd_rcgr = 0x18010,
++	.mnd_width = 16,
++	.hid_width = 5,
++	.parent_map = gcc_parent_map_0,
++	.freq_tbl = ftbl_gcc_qupv3_se_clk_src,
++	.clkr.hw.init = &(const struct clk_init_data) {
++		.name = "gcc_qupv3_wrap0_s0_clk_src",
++		.parent_data = gcc_parent_data_0,
++		.num_parents = ARRAY_SIZE(gcc_parent_data_0),
++		.flags = CLK_SET_RATE_PARENT,
++		.ops = &clk_rcg2_ops,
++	},
++};
++
++static struct clk_rcg2 gcc_qupv3_wrap0_s3_clk_src = {
++	.cmd_rcgr = 0x18290,
++	.mnd_width = 16,
++	.hid_width = 5,
++	.parent_map = gcc_parent_map_0,
++	.freq_tbl = ftbl_gcc_qupv3_se_clk_src,
++	.clkr.hw.init = &(const struct clk_init_data) {
++		.name = "gcc_qupv3_wrap0_s3_clk_src",
++		.parent_data = gcc_parent_data_0,
++		.num_parents = ARRAY_SIZE(gcc_parent_data_0),
++		.flags = CLK_SET_RATE_PARENT,
++		.ops = &clk_rcg2_ops,
++	},
++};
++
++static struct clk_rcg2 gcc_qupv3_wrap0_s4_clk_src = {
++	.cmd_rcgr = 0x183c8,
++	.mnd_width = 16,
++	.hid_width = 5,
++	.parent_map = gcc_parent_map_0,
++	.freq_tbl = ftbl_gcc_qupv3_se_clk_src,
++	.clkr.hw.init = &(const struct clk_init_data) {
++		.name = "gcc_qupv3_wrap0_s4_clk_src",
++		.parent_data = gcc_parent_data_0,
++		.num_parents = ARRAY_SIZE(gcc_parent_data_0),
++		.flags = CLK_SET_RATE_PARENT,
++		.ops = &clk_rcg2_ops,
++	},
++};
++
++static struct clk_rcg2 gcc_qupv3_wrap1_s2_clk_src = {
++	.cmd_rcgr = 0x1e280,
++	.mnd_width = 16,
++	.hid_width = 5,
++	.parent_map = gcc_parent_map_0,
++	.freq_tbl = ftbl_gcc_qupv3_se_clk_src,
++	.clkr.hw.init = &(const struct clk_init_data) {
++		.name = "gcc_qupv3_wrap1_s2_clk_src",
++		.parent_data = gcc_parent_data_0,
++		.num_parents = ARRAY_SIZE(gcc_parent_data_0),
++		.flags = CLK_SET_RATE_PARENT,
++		.ops = &clk_rcg2_ops,
++	},
++};
++
++static struct clk_rcg2 gcc_qupv3_wrap1_s3_clk_src = {
++	.cmd_rcgr = 0x1e3b8,
++	.mnd_width = 16,
++	.hid_width = 5,
++	.parent_map = gcc_parent_map_0,
++	.freq_tbl = ftbl_gcc_qupv3_se_clk_src,
++	.clkr.hw.init = &(const struct clk_init_data) {
++		.name = "gcc_qupv3_wrap1_s3_clk_src",
++		.parent_data = gcc_parent_data_0,
++		.num_parents = ARRAY_SIZE(gcc_parent_data_0),
++		.flags = CLK_SET_RATE_PARENT,
++		.ops = &clk_rcg2_ops,
++	},
++};
++
++static struct clk_rcg2 gcc_qupv3_wrap1_s4_clk_src = {
++	.cmd_rcgr = 0x1e4f0,
++	.mnd_width = 16,
++	.hid_width = 5,
++	.parent_map = gcc_parent_map_0,
++	.freq_tbl = ftbl_gcc_qupv3_se_clk_src,
++	.clkr.hw.init = &(const struct clk_init_data) {
++		.name = "gcc_qupv3_wrap1_s4_clk_src",
++		.parent_data = gcc_parent_data_0,
++		.num_parents = ARRAY_SIZE(gcc_parent_data_0),
++		.flags = CLK_SET_RATE_PARENT,
++		.ops = &clk_rcg2_ops,
++	},
++};
++
++static struct clk_branch gcc_qupv3_wrap_0_m_ahb_clk = {
++	.halt_reg = 0x23000,
++	.halt_check = BRANCH_HALT_VOTED,
++	.hwcg_reg = 0x23000,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x52008,
++		.enable_mask = BIT(20),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_qupv3_wrap_0_m_ahb_clk",
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_qupv3_wrap_0_s_ahb_clk = {
++	.halt_reg = 0x23004,
++	.halt_check = BRANCH_HALT_VOTED,
++	.hwcg_reg = 0x23004,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x52008,
++		.enable_mask = BIT(21),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_qupv3_wrap_0_s_ahb_clk",
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_qupv3_wrap_1_m_ahb_clk = {
++	.halt_reg = 0x23150,
++	.halt_check = BRANCH_HALT_VOTED,
++	.hwcg_reg = 0x23150,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x52010,
++		.enable_mask = BIT(2),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_qupv3_wrap_1_m_ahb_clk",
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_qupv3_wrap_1_s_ahb_clk = {
++	.halt_reg = 0x23154,
++	.halt_check = BRANCH_HALT_VOTED,
++	.hwcg_reg = 0x23154,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x52010,
++		.enable_mask = BIT(1),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_qupv3_wrap_1_s_ahb_clk",
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_qupv3_wrap0_s0_clk = {
++	.halt_reg = 0x18004,
++	.halt_check = BRANCH_HALT_VOTED,
++	.clkr = {
++		.enable_reg = 0x52008,
++		.enable_mask = BIT(22),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_qupv3_wrap0_s0_clk",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_qupv3_wrap0_s0_clk_src.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_qupv3_wrap0_s3_clk = {
++	.halt_reg = 0x18284,
++	.halt_check = BRANCH_HALT_VOTED,
++	.clkr = {
++		.enable_reg = 0x52008,
++		.enable_mask = BIT(25),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_qupv3_wrap0_s3_clk",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_qupv3_wrap0_s3_clk_src.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_qupv3_wrap0_s4_clk = {
++	.halt_reg = 0x183bc,
++	.halt_check = BRANCH_HALT_VOTED,
++	.clkr = {
++		.enable_reg = 0x52008,
++		.enable_mask = BIT(26),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_qupv3_wrap0_s4_clk",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_qupv3_wrap0_s4_clk_src.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_qupv3_wrap1_s2_clk = {
++	.halt_reg = 0x1e274,
++	.halt_check = BRANCH_HALT_VOTED,
++	.clkr = {
++		.enable_reg = 0x52010,
++		.enable_mask = BIT(6),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_qupv3_wrap1_s2_clk",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_qupv3_wrap1_s2_clk_src.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_qupv3_wrap1_s3_clk = {
++	.halt_reg = 0x1e3ac,
++	.halt_check = BRANCH_HALT_VOTED,
++	.clkr = {
++		.enable_reg = 0x52010,
++		.enable_mask = BIT(7),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_qupv3_wrap1_s3_clk",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_qupv3_wrap1_s3_clk_src.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_qupv3_wrap1_s4_clk = {
++	.halt_reg = 0x1e4e4,
++	.halt_check = BRANCH_HALT_VOTED,
++	.clkr = {
++		.enable_reg = 0x52010,
++		.enable_mask = BIT(8),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_qupv3_wrap1_s4_clk",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_qupv3_wrap1_s4_clk_src.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_disp_hf_axi_clk = {
++	.halt_reg = 0x2700c,
++	.halt_check = BRANCH_HALT_SKIP,
++	.hwcg_reg = 0x2700c,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x2700c,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_disp_hf_axi_clk",
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_gpu_gpll0_clk_src = {
++	.halt_check = BRANCH_HALT_DELAY,
++	.clkr = {
++		.enable_reg = 0x52000,
++		.enable_mask = BIT(15),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_gpu_gpll0_clk_src",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_gpll0.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_gpu_gpll0_div_clk_src = {
++	.halt_check = BRANCH_HALT_DELAY,
++	.clkr = {
++		.enable_reg = 0x52000,
++		.enable_mask = BIT(16),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_gpu_gpll0_div_clk_src",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_gpll0_out_even.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_gpu_memnoc_gfx_clk = {
++	.halt_reg = 0x71010,
++	.halt_check = BRANCH_HALT_VOTED,
++	.hwcg_reg = 0x71010,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x71010,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_gpu_memnoc_gfx_clk",
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_gpu_snoc_dvm_gfx_clk = {
++	.halt_reg = 0x71018,
++	.halt_check = BRANCH_HALT_DELAY,
++	.clkr = {
++		.enable_reg = 0x71018,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_gpu_snoc_dvm_gfx_clk",
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_video_axi0_clk = {
++	.halt_reg = 0x32018,
++	.halt_check = BRANCH_HALT_SKIP,
++	.hwcg_reg = 0x32018,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x32018,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_video_axi0_clk",
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_video_axi1_clk = {
++	.halt_reg = 0x32024,
++	.halt_check = BRANCH_HALT_SKIP,
++	.hwcg_reg = 0x32024,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x32024,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_video_axi1_clk",
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_aggre_noc_pcie_axi_clk = {
++	.halt_reg = 0x10064,
++	.halt_check = BRANCH_HALT_SKIP,
++	.hwcg_reg = 0x10064,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x52000,
++		.enable_mask = BIT(12),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_aggre_noc_pcie_axi_clk",
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_cfg_noc_pcie_anoc_ahb_clk = {
++	.halt_reg = 0x10050,
++	.halt_check = BRANCH_HALT_SKIP,
++	.hwcg_reg = 0x10050,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x52000,
++		.enable_mask = BIT(20),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_cfg_noc_pcie_anoc_ahb_clk",
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_cnoc_pcie_sf_axi_clk = {
++	.halt_reg = 0x10058,
++	.halt_check = BRANCH_HALT_VOTED,
++	.hwcg_reg = 0x10058,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x52008,
++		.enable_mask = BIT(6),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_cnoc_pcie_sf_axi_clk",
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_ddrss_pcie_sf_qtb_clk = {
++	.halt_reg = 0x10074,
++	.halt_check = BRANCH_HALT_SKIP,
++	.hwcg_reg = 0x10074,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x52000,
++		.enable_mask = BIT(19),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_ddrss_pcie_sf_qtb_clk",
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static const struct freq_tbl ftbl_gcc_pcie_0_aux_clk_src[] = {
++	F(19200000, P_BI_TCXO, 1, 0, 0),
++	{ }
++};
++
++static struct clk_rcg2 gcc_pcie_0_aux_clk_src = {
++	.cmd_rcgr = 0x6b074,
++	.mnd_width = 16,
++	.hid_width = 5,
++	.parent_map = gcc_parent_map_4,
++	.freq_tbl = ftbl_gcc_pcie_0_aux_clk_src,
++	.clkr.hw.init = &(const struct clk_init_data) {
++		.name = "gcc_pcie_0_aux_clk_src",
++		.parent_data = gcc_parent_data_4,
++		.num_parents = ARRAY_SIZE(gcc_parent_data_4),
++		.flags = CLK_SET_RATE_PARENT,
++		.ops = &clk_rcg2_shared_ops,
++	},
++};
++
++static struct clk_branch gcc_pcie_0_aux_clk = {
++	.halt_reg = 0x6b03c,
++	.halt_check = BRANCH_HALT_VOTED,
++	.clkr = {
++		.enable_reg = 0x52008,
++		.enable_mask = BIT(3),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_pcie_0_aux_clk",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_pcie_0_aux_clk_src.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_pcie_0_cfg_ahb_clk = {
++	.halt_reg = 0x6b038,
++	.halt_check = BRANCH_HALT_VOTED,
++	.hwcg_reg = 0x6b038,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x52008,
++		.enable_mask = BIT(2),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_pcie_0_cfg_ahb_clk",
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_pcie_0_mstr_axi_clk = {
++	.halt_reg = 0x6b02c,
++	.halt_check = BRANCH_HALT_SKIP,
++	.hwcg_reg = 0x6b02c,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x52008,
++		.enable_mask = BIT(1),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_pcie_0_mstr_axi_clk",
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static const struct freq_tbl ftbl_gcc_pcie_0_phy_rchng_clk_src[] = {
++	F(100000000, P_GCC_GPLL0_OUT_EVEN, 3, 0, 0),
++	{ }
++};
++
++static struct clk_rcg2 gcc_pcie_0_phy_rchng_clk_src = {
++	.cmd_rcgr = 0x6b058,
++	.mnd_width = 0,
++	.hid_width = 5,
++	.parent_map = gcc_parent_map_0,
++	.freq_tbl = ftbl_gcc_pcie_0_phy_rchng_clk_src,
++	.clkr.hw.init = &(const struct clk_init_data) {
++		.name = "gcc_pcie_0_phy_rchng_clk_src",
++		.parent_data = gcc_parent_data_0,
++		.num_parents = ARRAY_SIZE(gcc_parent_data_0),
++		.flags = CLK_SET_RATE_PARENT,
++		.ops = &clk_rcg2_shared_ops,
++	},
++};
++
++static struct clk_branch gcc_pcie_0_phy_rchng_clk = {
++	.halt_reg = 0x6b054,
++	.halt_check = BRANCH_HALT_VOTED,
++	.clkr = {
++		.enable_reg = 0x52000,
++		.enable_mask = BIT(22),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_pcie_0_phy_rchng_clk",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_pcie_0_phy_rchng_clk_src.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_regmap_phy_mux gcc_pcie_0_pipe_clk_src = {
++	.reg = 0x6b070,
++	.clkr = {
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_pcie_0_pipe_clk_src",
++			.parent_data = &(const struct clk_parent_data){
++				.index = DT_PCIE_0_PIPE,
++			},
++			.num_parents = 1,
++			.ops = &clk_regmap_phy_mux_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_pcie_0_pipe_clk = {
++	.halt_reg = 0x6b048,
++	.halt_check = BRANCH_HALT_SKIP,
++	.clkr = {
++		.enable_reg = 0x52008,
++		.enable_mask = BIT(4),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_pcie_0_pipe_clk",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_pcie_0_pipe_clk_src.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_pcie_0_slv_axi_clk = {
++	.halt_reg = 0x6b020,
++	.halt_check = BRANCH_HALT_VOTED,
++	.hwcg_reg = 0x6b020,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x52008,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_pcie_0_slv_axi_clk",
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_pcie_0_slv_q2a_axi_clk = {
++	.halt_reg = 0x6b01c,
++	.halt_check = BRANCH_HALT_VOTED,
++	.clkr = {
++		.enable_reg = 0x52008,
++		.enable_mask = BIT(5),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_pcie_0_slv_q2a_axi_clk",
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct gdsc pcie_0_gdsc = {
++	.gdscr = 0x6b004,
++	.collapse_ctrl = 0x5214c,
++	.collapse_mask = BIT(0),
++	.pd = {
++		.name = "pcie_0_gdsc",
++	},
++	.pwrsts = PWRSTS_RET_ON,
++	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE | VOTABLE,
++};
++
++static struct gdsc pcie_0_phy_gdsc = {
++	.gdscr = 0x6c000,
++	.collapse_ctrl = 0x5214c,
++	.collapse_mask = BIT(1),
++	.pd = {
++		.name = "pcie_0_phy_gdsc",
++	},
++	.pwrsts = PWRSTS_RET_ON,
++	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE | VOTABLE,
++};
++
++static struct gdsc usb30_prim_gdsc = {
++	.gdscr = 0x39004,
++	.pd = {
++		.name = "usb30_prim_gdsc",
++	},
++	.pwrsts = PWRSTS_RET_ON,
++	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
++};
++
++static struct gdsc ufs_phy_gdsc = {
++	.gdscr = 0x77004,
++	.pd = {
++		.name = "ufs_phy_gdsc",
++	},
++	.pwrsts = PWRSTS_OFF_ON,
++	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
++};
++
++static struct gdsc ufs_mem_phy_gdsc = {
++	.gdscr = 0x9e000,
++	.pd = {
++		.name = "ufs_mem_phy_gdsc",
++	},
++	.pwrsts = PWRSTS_OFF_ON,
++	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
++};
++
++static struct clk_regmap *gcc_sm8635_clocks[] = {
++	[GCC_GPLL0] = &gcc_gpll0.clkr,
++	[GCC_GPLL0_OUT_EVEN] = &gcc_gpll0_out_even.clkr,
++	[GCC_GPLL4] = &gcc_gpll4.clkr,
++	[GCC_DISP_HF_AXI_CLK] = &gcc_disp_hf_axi_clk.clkr,
++	[GCC_GPU_GPLL0_CLK_SRC] = &gcc_gpu_gpll0_clk_src.clkr,
++	[GCC_GPU_GPLL0_DIV_CLK_SRC] = &gcc_gpu_gpll0_div_clk_src.clkr,
++	[GCC_GPU_MEMNOC_GFX_CLK] = &gcc_gpu_memnoc_gfx_clk.clkr,
++	[GCC_GPU_SNOC_DVM_GFX_CLK] = &gcc_gpu_snoc_dvm_gfx_clk.clkr,
++	[GCC_VIDEO_AXI0_CLK] = &gcc_video_axi0_clk.clkr,
++	[GCC_VIDEO_AXI1_CLK] = &gcc_video_axi1_clk.clkr,
++	[GCC_AGGRE_NOC_PCIE_AXI_CLK] = &gcc_aggre_noc_pcie_axi_clk.clkr,
++	[GCC_CFG_NOC_PCIE_ANOC_AHB_CLK] = &gcc_cfg_noc_pcie_anoc_ahb_clk.clkr,
++	[GCC_CNOC_PCIE_SF_AXI_CLK] = &gcc_cnoc_pcie_sf_axi_clk.clkr,
++	[GCC_DDRSS_PCIE_SF_QTB_CLK] = &gcc_ddrss_pcie_sf_qtb_clk.clkr,
++	[GCC_PCIE_0_AUX_CLK] = &gcc_pcie_0_aux_clk.clkr,
++	[GCC_PCIE_0_AUX_CLK_SRC] = &gcc_pcie_0_aux_clk_src.clkr,
++	[GCC_PCIE_0_CFG_AHB_CLK] = &gcc_pcie_0_cfg_ahb_clk.clkr,
++	[GCC_PCIE_0_MSTR_AXI_CLK] = &gcc_pcie_0_mstr_axi_clk.clkr,
++	[GCC_PCIE_0_PHY_RCHNG_CLK] = &gcc_pcie_0_phy_rchng_clk.clkr,
++	[GCC_PCIE_0_PHY_RCHNG_CLK_SRC] = &gcc_pcie_0_phy_rchng_clk_src.clkr,
++	[GCC_PCIE_0_PIPE_CLK] = &gcc_pcie_0_pipe_clk.clkr,
++	[GCC_PCIE_0_PIPE_CLK_SRC] = &gcc_pcie_0_pipe_clk_src.clkr,
++	[GCC_PCIE_0_SLV_AXI_CLK] = &gcc_pcie_0_slv_axi_clk.clkr,
++	[GCC_PCIE_0_SLV_Q2A_AXI_CLK] = &gcc_pcie_0_slv_q2a_axi_clk.clkr,
++	[GCC_AGGRE_USB3_PRIM_AXI_CLK] = &gcc_aggre_usb3_prim_axi_clk.clkr,
++	[GCC_CFG_NOC_USB3_PRIM_AXI_CLK] = &gcc_cfg_noc_usb3_prim_axi_clk.clkr,
++	[GCC_USB30_PRIM_MASTER_CLK] = &gcc_usb30_prim_master_clk.clkr,
++	[GCC_USB30_PRIM_MASTER_CLK_SRC] = &gcc_usb30_prim_master_clk_src.clkr,
++	[GCC_USB30_PRIM_MOCK_UTMI_CLK] = &gcc_usb30_prim_mock_utmi_clk.clkr,
++	[GCC_USB30_PRIM_MOCK_UTMI_CLK_SRC] = &gcc_usb30_prim_mock_utmi_clk_src.clkr,
++	[GCC_USB30_PRIM_MOCK_UTMI_POSTDIV_CLK_SRC] = &gcc_usb30_prim_mock_utmi_postdiv_clk_src.clkr,
++	[GCC_USB30_PRIM_SLEEP_CLK] = &gcc_usb30_prim_sleep_clk.clkr,
++	[GCC_AGGRE_UFS_PHY_AXI_CLK] = &gcc_aggre_ufs_phy_axi_clk.clkr,
++	[GCC_UFS_PHY_AHB_CLK] = &gcc_ufs_phy_ahb_clk.clkr,
++	[GCC_UFS_PHY_AXI_CLK] = &gcc_ufs_phy_axi_clk.clkr,
++	[GCC_UFS_PHY_AXI_CLK_SRC] = &gcc_ufs_phy_axi_clk_src.clkr,
++	[GCC_UFS_PHY_ICE_CORE_CLK] = &gcc_ufs_phy_ice_core_clk.clkr,
++	[GCC_UFS_PHY_ICE_CORE_CLK_SRC] = &gcc_ufs_phy_ice_core_clk_src.clkr,
++	[GCC_UFS_PHY_PHY_AUX_CLK] = &gcc_ufs_phy_phy_aux_clk.clkr,
++	[GCC_UFS_PHY_PHY_AUX_CLK_SRC] = &gcc_ufs_phy_phy_aux_clk_src.clkr,
++	[GCC_UFS_PHY_RX_SYMBOL_0_CLK] = &gcc_ufs_phy_rx_symbol_0_clk.clkr,
++	[GCC_UFS_PHY_RX_SYMBOL_0_CLK_SRC] = &gcc_ufs_phy_rx_symbol_0_clk_src.clkr,
++	[GCC_UFS_PHY_RX_SYMBOL_1_CLK] = &gcc_ufs_phy_rx_symbol_1_clk.clkr,
++	[GCC_UFS_PHY_RX_SYMBOL_1_CLK_SRC] = &gcc_ufs_phy_rx_symbol_1_clk_src.clkr,
++	[GCC_UFS_PHY_TX_SYMBOL_0_CLK] = &gcc_ufs_phy_tx_symbol_0_clk.clkr,
++	[GCC_UFS_PHY_TX_SYMBOL_0_CLK_SRC] = &gcc_ufs_phy_tx_symbol_0_clk_src.clkr,
++	[GCC_UFS_PHY_UNIPRO_CORE_CLK] = &gcc_ufs_phy_unipro_core_clk.clkr,
++	[GCC_UFS_PHY_UNIPRO_CORE_CLK_SRC] = &gcc_ufs_phy_unipro_core_clk_src.clkr,
++	[GCC_QUPV3_WRAP_1_M_AHB_CLK] = &gcc_qupv3_wrap_0_m_ahb_clk.clkr,
++	[GCC_QUPV3_WRAP_1_S_AHB_CLK] = &gcc_qupv3_wrap_0_s_ahb_clk.clkr,
++	[GCC_QUPV3_WRAP1_S0_CLK] = &gcc_qupv3_wrap0_s0_clk.clkr,
++	[GCC_QUPV3_WRAP1_S0_CLK_SRC] = &gcc_qupv3_wrap0_s0_clk_src.clkr,
++	[GCC_QUPV3_WRAP1_S3_CLK] = &gcc_qupv3_wrap0_s3_clk.clkr,
++	[GCC_QUPV3_WRAP1_S3_CLK_SRC] = &gcc_qupv3_wrap0_s3_clk_src.clkr,
++	[GCC_QUPV3_WRAP1_S4_CLK] = &gcc_qupv3_wrap0_s4_clk.clkr,
++	[GCC_QUPV3_WRAP1_S4_CLK_SRC] = &gcc_qupv3_wrap0_s4_clk_src.clkr,
++	[GCC_QUPV3_WRAP_2_M_AHB_CLK] = &gcc_qupv3_wrap_1_m_ahb_clk.clkr,
++	[GCC_QUPV3_WRAP_2_S_AHB_CLK] = &gcc_qupv3_wrap_1_s_ahb_clk.clkr,
++	[GCC_QUPV3_WRAP2_S2_CLK] = &gcc_qupv3_wrap1_s2_clk.clkr,
++	[GCC_QUPV3_WRAP2_S2_CLK_SRC] = &gcc_qupv3_wrap1_s2_clk_src.clkr,
++	[GCC_QUPV3_WRAP2_S3_CLK] = &gcc_qupv3_wrap1_s3_clk.clkr,
++	[GCC_QUPV3_WRAP2_S3_CLK_SRC] = &gcc_qupv3_wrap1_s3_clk_src.clkr,
++	[GCC_QUPV3_WRAP2_S4_CLK] = &gcc_qupv3_wrap1_s4_clk.clkr,
++	[GCC_QUPV3_WRAP2_S4_CLK_SRC] = &gcc_qupv3_wrap1_s4_clk_src.clkr,
++};
++
++static struct gdsc *gcc_sm8635_gdscs[] = {
++	[PCIE_0_GDSC] = &pcie_0_gdsc,
++	[PCIE_0_PHY_GDSC] = &pcie_0_phy_gdsc,
++	[USB30_PRIM_GDSC] = &usb30_prim_gdsc,
++	[UFS_PHY_GDSC] = &ufs_phy_gdsc,
++	[UFS_MEM_PHY_GDSC] = &ufs_mem_phy_gdsc,
++};
++
++static const struct qcom_reset_map gcc_sm8635_resets[] = {
++	[GCC_PCIE_0_BCR] = { 0x6b000 },
++	[GCC_PCIE_0_LINK_DOWN_BCR] = { 0x6c014 },
++	[GCC_PCIE_0_NOCSR_COM_PHY_BCR] = { 0x6c020 },
++	[GCC_PCIE_0_PHY_BCR] = { 0x6c01c },
++	[GCC_PCIE_0_PHY_NOCSR_COM_PHY_BCR] = { 0x6c028 },
++	[GCC_QUSB2PHY_PRIM_BCR] = { 0x12000 },
++	[GCC_UFS_PHY_BCR] = { 0x77000 },
++	[GCC_USB30_PRIM_BCR] = { 0x39000 },
++};
++
++static const struct regmap_config gcc_sm8635_regmap_config = {
++	.reg_bits = 32,
++	.reg_stride = 4,
++	.val_bits = 32,
++	.max_register = 0x1f4200,
++	.fast_io = true,
++};
++
++static const u32 gcc_sm8635_critical_cbcrs[] = {
++	0x26004, /* GCC_CAMERA_AHB_CLK */
++	0x26028, /* GCC_CAMERA_XO_CLK */
++	0x27004, /* GCC_DISP_AHB_CLK */
++	0x27018, /* GCC_DISP_XO_CLK */
++	0x71004, /* GCC_GPU_CFG_AHB_CLK */
++	0x32004, /* GCC_VIDEO_AHB_CLK */
++	0x32030, /* GCC_VIDEO_XO_CLK */
++};
++
++static const struct qcom_cc_driver_data gcc_sm8635_driver_data = {
++	.clk_cbcrs = gcc_sm8635_critical_cbcrs,
++	.num_clk_cbcrs = ARRAY_SIZE(gcc_sm8635_critical_cbcrs),
++};
++
++static const struct qcom_cc_desc gcc_sm8635_desc = {
++	.driver_data = &gcc_sm8635_driver_data,
++	.config = &gcc_sm8635_regmap_config,
++	.clks = gcc_sm8635_clocks,
++	.num_clks = ARRAY_SIZE(gcc_sm8635_clocks),
++	.resets = gcc_sm8635_resets,
++	.num_resets = ARRAY_SIZE(gcc_sm8635_resets),
++	.gdscs = gcc_sm8635_gdscs,
++	.num_gdscs = ARRAY_SIZE(gcc_sm8635_gdscs),
++};
++
++static const struct of_device_id gcc_sm8635_match_table[] = {
++	{ .compatible = "qcom,sm8635-gcc" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, gcc_sm8635_match_table);
++
++static int gcc_probe_ret = -999;
++module_param(gcc_probe_ret, int, 0444);
++
++static int gcc_sm8635_probe(struct platform_device *pdev)
++{
++	gcc_probe_ret = qcom_cc_probe(pdev, &gcc_sm8635_desc);
++	return gcc_probe_ret;
++}
++
++static struct platform_driver gcc_sm8635_driver = {
++	.probe = gcc_sm8635_probe,
++	.driver = {
++		.name = "gcc-sm8635",
++		.of_match_table = gcc_sm8635_match_table,
++	},
++};
++
++subsys_platform_driver(gcc_sm8635_driver);
++
++MODULE_DESCRIPTION("QTI GCC SM8635 Minimal Driver");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/clk/qcom/videocc-sm8550.c b/drivers/clk/qcom/videocc-sm8550.c
+index c2f11489a..80ae6a425 100644
+--- a/drivers/clk/qcom/videocc-sm8550.c
++++ b/drivers/clk/qcom/videocc-sm8550.c
+@@ -144,6 +144,18 @@ static const struct freq_tbl ftbl_video_cc_mvs0_clk_src_sm8650[] = {
+ 	{ }
+ };
+ 
++static const struct freq_tbl ftbl_video_cc_mvs0_clk_src_sm8635[] = {
++	F(576000000, P_VIDEO_CC_PLL0_OUT_MAIN, 1, 0, 0),
++	F(633000000, P_VIDEO_CC_PLL0_OUT_MAIN, 1, 0, 0),
++	F(720000000, P_VIDEO_CC_PLL0_OUT_MAIN, 1, 0, 0),
++	F(1014000000, P_VIDEO_CC_PLL0_OUT_MAIN, 1, 0, 0),
++	F(1098000000, P_VIDEO_CC_PLL0_OUT_MAIN, 1, 0, 0),
++	F(1113000000, P_VIDEO_CC_PLL0_OUT_MAIN, 1, 0, 0),
++	F(1332000000, P_VIDEO_CC_PLL0_OUT_MAIN, 1, 0, 0),
++	F(1600000000, P_VIDEO_CC_PLL0_OUT_MAIN, 1, 0, 0),
++	{ }
++};
++
+ static const struct freq_tbl ftbl_video_cc_mvs0_clk_src_x1e80100[] = {
+ 	F(576000000, P_VIDEO_CC_PLL0_OUT_MAIN, 1, 0, 0),
+ 	F(720000000, P_VIDEO_CC_PLL0_OUT_MAIN, 1, 0, 0),
+@@ -576,12 +588,20 @@ static const struct qcom_cc_desc video_cc_sm8550_desc = {
+ 
+ static const struct of_device_id video_cc_sm8550_match_table[] = {
+ 	{ .compatible = "qcom,sm8550-videocc" },
++	{ .compatible = "qcom,sm8635-videocc" },
+ 	{ .compatible = "qcom,sm8650-videocc" },
+ 	{ .compatible = "qcom,x1e80100-videocc" },
+ 	{ }
+ };
+ MODULE_DEVICE_TABLE(of, video_cc_sm8550_match_table);
+ 
++static void video_cc_sm8635_patch_shift_clk(struct clk_branch *clk, u32 reg)
++{
++	clk->halt_reg = reg;
++	clk->hwcg_reg = reg;
++	clk->clkr.enable_reg = reg;
++}
++
+ static int video_cc_sm8550_probe(struct platform_device *pdev)
+ {
+ 	if (of_device_is_compatible(pdev->dev.of_node, "qcom,x1e80100-videocc")) {
+@@ -591,9 +611,33 @@ static int video_cc_sm8550_probe(struct platform_device *pdev)
+ 		video_cc_pll1_config.alpha = 0xc000;
+ 		video_cc_mvs0_clk_src.freq_tbl = ftbl_video_cc_mvs0_clk_src_x1e80100;
+ 		video_cc_mvs1_clk_src.freq_tbl = ftbl_video_cc_mvs1_clk_src_x1e80100;
+-	}
++	} else if (of_device_is_compatible(pdev->dev.of_node, "qcom,sm8635-videocc")) {
++		static const struct {
++			unsigned int idx;
++			struct clk_branch *clk;
++			u32 reg;
++		} sm8635_shifts[] = {
++			{ VIDEO_CC_MVS0_SHIFT_CLK, &video_cc_mvs0_shift_clk, 0x8144 },
++			{ VIDEO_CC_MVS0C_SHIFT_CLK, &video_cc_mvs0c_shift_clk, 0x8148 },
++			{ VIDEO_CC_MVS1_SHIFT_CLK, &video_cc_mvs1_shift_clk, 0x814c },
++			{ VIDEO_CC_MVS1C_SHIFT_CLK, &video_cc_mvs1c_shift_clk, 0x8150 },
++		};
++		size_t i;
+ 
+-	if (of_device_is_compatible(pdev->dev.of_node, "qcom,sm8650-videocc")) {
++		video_cc_pll0_config.l = 0x1e;
++		video_cc_pll0_config.alpha = 0x0000;
++		video_cc_pll1_config.l = 0x2b;
++		video_cc_pll1_config.alpha = 0xc000;
++		video_cc_mvs0_clk_src.freq_tbl = ftbl_video_cc_mvs0_clk_src_sm8635;
++		video_cc_mvs1_clk_src.freq_tbl = ftbl_video_cc_mvs1_clk_src_sm8650;
++		for (i = 0; i < ARRAY_SIZE(sm8635_shifts); i++) {
++			video_cc_sm8635_patch_shift_clk(sm8635_shifts[i].clk,
++							sm8635_shifts[i].reg);
++			video_cc_sm8550_clocks[sm8635_shifts[i].idx] =
++				&sm8635_shifts[i].clk->clkr;
++		}
++		video_cc_sm8550_clocks[VIDEO_CC_XO_CLK_SRC] = &video_cc_xo_clk_src.clkr;
++	} else if (of_device_is_compatible(pdev->dev.of_node, "qcom,sm8650-videocc")) {
+ 		video_cc_pll0_config.l = 0x1e;
+ 		video_cc_pll0_config.alpha = 0xa000;
+ 		video_cc_pll1_config.l = 0x2b;
+diff --git a/drivers/interconnect/qcom/Makefile b/drivers/interconnect/qcom/Makefile
+index a71478aaf..392947cdd 100644
+--- a/drivers/interconnect/qcom/Makefile
++++ b/drivers/interconnect/qcom/Makefile
+@@ -48,6 +48,7 @@ qnoc-sm8250-objs			:= sm8250.o
+ qnoc-sm8350-objs			:= sm8350.o
+ qnoc-sm8450-objs			:= sm8450.o
+ qnoc-sm8550-objs			:= sm8550.o
++qnoc-sm8635-objs			:= sm8635.o
+ qnoc-sm8650-objs			:= sm8650.o
+ qnoc-sm8750-objs			:= sm8750.o
+ qnoc-x1e80100-objs			:= x1e80100.o
+@@ -98,6 +99,7 @@ obj-$(CONFIG_INTERCONNECT_QCOM_SM8250) += qnoc-sm8250.o
+ obj-$(CONFIG_INTERCONNECT_QCOM_SM8350) += qnoc-sm8350.o
+ obj-$(CONFIG_INTERCONNECT_QCOM_SM8450) += qnoc-sm8450.o
+ obj-$(CONFIG_INTERCONNECT_QCOM_SM8550) += qnoc-sm8550.o
++obj-$(CONFIG_INTERCONNECT_QCOM_SM8650) += qnoc-sm8635.o
+ obj-$(CONFIG_INTERCONNECT_QCOM_SM8650) += qnoc-sm8650.o
+ obj-$(CONFIG_INTERCONNECT_QCOM_SM8750) += qnoc-sm8750.o
+ obj-$(CONFIG_INTERCONNECT_QCOM_X1E80100) += qnoc-x1e80100.o
+diff --git a/drivers/interconnect/qcom/sm8635.c b/drivers/interconnect/qcom/sm8635.c
+new file mode 100644
+index 000000000..69bc10ca4
+--- /dev/null
++++ b/drivers/interconnect/qcom/sm8635.c
+@@ -0,0 +1,1463 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Qualcomm SM8635 (cliffs) RPMh Network-on-Chip (NoC) driver
++ * Auto-extracted from Xiaomi Pad 7 Pro stock qnoc-cliffs.ko.
++ */
++
++#include <linux/device.h>
++#include <linux/interconnect.h>
++#include <linux/interconnect-provider.h>
++#include <linux/module.h>
++#include <linux/of_platform.h>
++#include <dt-bindings/interconnect/qcom,sm8635-rpmh.h>
++
++#include "bcm-voter.h"
++#include "icc-rpmh.h"
++
++static struct qcom_icc_node qhm_qspi;
++static struct qcom_icc_node qhm_qup0;
++static struct qcom_icc_node xm_sdc2;
++static struct qcom_icc_node xm_ufs_mem;
++static struct qcom_icc_node xm_usb3_0;
++static struct qcom_icc_node qns_a1noc_snoc;
++static struct qcom_icc_node qhm_qdss_bam;
++static struct qcom_icc_node qhm_qup1;
++static struct qcom_icc_node qxm_crypto;
++static struct qcom_icc_node qxm_ipa;
++static struct qcom_icc_node xm_qdss_etr_0;
++static struct qcom_icc_node xm_qdss_etr_1;
++static struct qcom_icc_node qns_a2noc_snoc;
++static struct qcom_icc_node qup0_core_master;
++static struct qcom_icc_node qup1_core_master;
++static struct qcom_icc_node qup0_core_slave;
++static struct qcom_icc_node qup1_core_slave;
++static struct qcom_icc_node qsm_cfg;
++static struct qcom_icc_node qhs_ahb2phy0;
++static struct qcom_icc_node qhs_ahb2phy1;
++static struct qcom_icc_node qhs_camera_cfg;
++static struct qcom_icc_node qhs_clk_ctl;
++static struct qcom_icc_node qhs_cpr_cx;
++static struct qcom_icc_node qhs_cpr_mmcx;
++static struct qcom_icc_node qhs_cpr_mxc;
++static struct qcom_icc_node qhs_cpr_nspcx;
++static struct qcom_icc_node qhs_crypto0_cfg;
++static struct qcom_icc_node qhs_cx_rdpm;
++static struct qcom_icc_node qhs_gpuss_cfg;
++static struct qcom_icc_node qhs_i3c_ibi0_cfg;
++static struct qcom_icc_node qhs_i3c_ibi1_cfg;
++static struct qcom_icc_node qhs_imem_cfg;
++static struct qcom_icc_node qhs_mss_cfg;
++static struct qcom_icc_node qhs_mx_2_rdpm;
++static struct qcom_icc_node qhs_mx_rdpm;
++static struct qcom_icc_node qhs_pcie_rscc;
++static struct qcom_icc_node qhs_pdm;
++static struct qcom_icc_node qhs_qdss_cfg;
++static struct qcom_icc_node qhs_qspi;
++static struct qcom_icc_node qhs_qup0;
++static struct qcom_icc_node qhs_qup1;
++static struct qcom_icc_node qhs_sdc2;
++static struct qcom_icc_node qhs_tcsr;
++static struct qcom_icc_node qhs_tlmm;
++static struct qcom_icc_node qhs_ufs_mem_cfg;
++static struct qcom_icc_node qhs_usb3_0;
++static struct qcom_icc_node qhs_venus_cfg;
++static struct qcom_icc_node qhs_vsense_ctrl_cfg;
++static struct qcom_icc_node qhs_wlan_q6;
++static struct qcom_icc_node qss_mnoc_hf_cfg;
++static struct qcom_icc_node qss_mnoc_sf_cfg;
++static struct qcom_icc_node qss_nsp_qtb_cfg;
++static struct qcom_icc_node qss_pcie_anoc_cfg;
++static struct qcom_icc_node qss_wlan_q6_throttle_cfg;
++static struct qcom_icc_node srvc_cnoc_cfg;
++static struct qcom_icc_node xs_qdss_stm;
++static struct qcom_icc_node xs_sys_tcu_cfg;
++static struct qcom_icc_node qnm_gemnoc_cnoc;
++static struct qcom_icc_node qnm_gemnoc_pcie;
++static struct qcom_icc_node qhs_aoss;
++static struct qcom_icc_node qhs_display_cfg;
++static struct qcom_icc_node qhs_ipa;
++static struct qcom_icc_node qhs_ipc_router;
++static struct qcom_icc_node qhs_pcie0_cfg;
++static struct qcom_icc_node qhs_prng;
++static struct qcom_icc_node qhs_tme_cfg;
++static struct qcom_icc_node qss_apss;
++static struct qcom_icc_node qss_cfg;
++static struct qcom_icc_node qss_ddrss_cfg;
++static struct qcom_icc_node qxs_imem;
++static struct qcom_icc_node srvc_cnoc_main;
++static struct qcom_icc_node xs_pcie_0;
++static struct qcom_icc_node alm_gpu_tcu;
++static struct qcom_icc_node alm_sys_tcu;
++static struct qcom_icc_node chm_apps;
++static struct qcom_icc_node qnm_gpu;
++static struct qcom_icc_node qnm_lpass_gemnoc;
++static struct qcom_icc_node qnm_mdsp;
++static struct qcom_icc_node qnm_mnoc_hf;
++static struct qcom_icc_node qnm_mnoc_sf;
++static struct qcom_icc_node qnm_nsp_gemnoc;
++static struct qcom_icc_node qnm_pcie;
++static struct qcom_icc_node qnm_snoc_sf;
++static struct qcom_icc_node qxm_wlan_q6;
++static struct qcom_icc_node xm_gic;
++static struct qcom_icc_node qns_gem_noc_cnoc;
++static struct qcom_icc_node qns_llcc;
++static struct qcom_icc_node qns_pcie;
++static struct qcom_icc_node qnm_lpiaon_noc;
++static struct qcom_icc_node qns_lpass_ag_noc_gemnoc;
++static struct qcom_icc_node qnm_lpass_lpinoc;
++static struct qcom_icc_node qns_lpass_aggnoc;
++static struct qcom_icc_node qxm_lpinoc_dsp_axim;
++static struct qcom_icc_node qns_lpi_aon_noc;
++static struct qcom_icc_node llcc_mc;
++static struct qcom_icc_node ebi;
++static struct qcom_icc_node qnm_camnoc_hf;
++static struct qcom_icc_node qnm_camnoc_icp;
++static struct qcom_icc_node qnm_camnoc_sf;
++static struct qcom_icc_node qnm_mdp;
++static struct qcom_icc_node qnm_video;
++static struct qcom_icc_node qnm_video_cv_cpu;
++static struct qcom_icc_node qnm_video_cvp;
++static struct qcom_icc_node qnm_video_v_cpu;
++static struct qcom_icc_node qsm_hf_mnoc_cfg;
++static struct qcom_icc_node qsm_sf_mnoc_cfg;
++static struct qcom_icc_node qns_mem_noc_hf;
++static struct qcom_icc_node qns_mem_noc_sf;
++static struct qcom_icc_node srvc_mnoc_hf;
++static struct qcom_icc_node srvc_mnoc_sf;
++static struct qcom_icc_node qxm_nsp;
++static struct qcom_icc_node qns_nsp_gemnoc;
++static struct qcom_icc_node qsm_pcie_anoc_cfg;
++static struct qcom_icc_node xm_pcie3_0;
++static struct qcom_icc_node qns_pcie_mem_noc;
++static struct qcom_icc_node srvc_pcie_aggre_noc;
++static struct qcom_icc_node qnm_aggre1_noc;
++static struct qcom_icc_node qnm_aggre2_noc;
++static struct qcom_icc_node qnm_apss_noc;
++static struct qcom_icc_node qnm_cnoc_data;
++static struct qcom_icc_node qns_gemnoc_sf;
++
++static struct qcom_icc_node qhm_qspi = {
++	.name = "qhm_qspi",
++	.channels = 1,
++	.buswidth = 4,
++	.num_links = 1,
++	.link_nodes = { &qns_a1noc_snoc },
++};
++
++static struct qcom_icc_node qhm_qup0 = {
++	.name = "qhm_qup0",
++	.channels = 1,
++	.buswidth = 4,
++	.num_links = 1,
++	.link_nodes = { &qns_a1noc_snoc },
++};
++
++static struct qcom_icc_node xm_sdc2 = {
++	.name = "xm_sdc2",
++	.channels = 1,
++	.buswidth = 8,
++	.num_links = 1,
++	.link_nodes = { &qns_a1noc_snoc },
++};
++
++static struct qcom_icc_node xm_ufs_mem = {
++	.name = "xm_ufs_mem",
++	.channels = 1,
++	.buswidth = 16,
++	.num_links = 1,
++	.link_nodes = { &qns_a1noc_snoc },
++};
++
++static struct qcom_icc_node xm_usb3_0 = {
++	.name = "xm_usb3_0",
++	.channels = 1,
++	.buswidth = 8,
++	.num_links = 1,
++	.link_nodes = { &qns_a1noc_snoc },
++};
++
++static struct qcom_icc_node qns_a1noc_snoc = {
++	.name = "qns_a1noc_snoc",
++	.channels = 1,
++	.buswidth = 16,
++	.num_links = 1,
++	.link_nodes = { &qnm_aggre1_noc },
++};
++
++static struct qcom_icc_node qhm_qdss_bam = {
++	.name = "qhm_qdss_bam",
++	.channels = 1,
++	.buswidth = 4,
++	.num_links = 1,
++	.link_nodes = { &qns_a2noc_snoc },
++};
++
++static struct qcom_icc_node qhm_qup1 = {
++	.name = "qhm_qup1",
++	.channels = 1,
++	.buswidth = 4,
++	.num_links = 1,
++	.link_nodes = { &qns_a2noc_snoc },
++};
++
++static struct qcom_icc_node qxm_crypto = {
++	.name = "qxm_crypto",
++	.channels = 1,
++	.buswidth = 8,
++	.num_links = 1,
++	.link_nodes = { &qns_a2noc_snoc },
++};
++
++static struct qcom_icc_node qxm_ipa = {
++	.name = "qxm_ipa",
++	.channels = 1,
++	.buswidth = 8,
++	.num_links = 1,
++	.link_nodes = { &qns_a2noc_snoc },
++};
++
++static struct qcom_icc_node xm_qdss_etr_0 = {
++	.name = "xm_qdss_etr_0",
++	.channels = 1,
++	.buswidth = 8,
++	.num_links = 1,
++	.link_nodes = { &qns_a2noc_snoc },
++};
++
++static struct qcom_icc_node xm_qdss_etr_1 = {
++	.name = "xm_qdss_etr_1",
++	.channels = 1,
++	.buswidth = 8,
++	.num_links = 1,
++	.link_nodes = { &qns_a2noc_snoc },
++};
++
++static struct qcom_icc_node qns_a2noc_snoc = {
++	.name = "qns_a2noc_snoc",
++	.channels = 1,
++	.buswidth = 16,
++	.num_links = 1,
++	.link_nodes = { &qnm_aggre2_noc },
++};
++
++static struct qcom_icc_node qup0_core_master = {
++	.name = "qup0_core_master",
++	.channels = 1,
++	.buswidth = 4,
++	.num_links = 1,
++	.link_nodes = { &qup0_core_slave },
++};
++
++static struct qcom_icc_node qup1_core_master = {
++	.name = "qup1_core_master",
++	.channels = 1,
++	.buswidth = 4,
++	.num_links = 1,
++	.link_nodes = { &qup1_core_slave },
++};
++
++static struct qcom_icc_node qup0_core_slave = {
++	.name = "qup0_core_slave",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qup1_core_slave = {
++	.name = "qup1_core_slave",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qsm_cfg = {
++	.name = "qsm_cfg",
++	.channels = 1,
++	.buswidth = 4,
++	.num_links = 39,
++	.link_nodes = { &qhs_ahb2phy0, &qhs_ahb2phy1, &qhs_camera_cfg, &qhs_clk_ctl, &qhs_cpr_cx, &qhs_cpr_mmcx, &qhs_cpr_mxc, &qhs_cpr_nspcx, &qhs_crypto0_cfg, &qhs_cx_rdpm, &qhs_gpuss_cfg, &qhs_i3c_ibi0_cfg, &qhs_i3c_ibi1_cfg, &qhs_imem_cfg, &qhs_mss_cfg, &qhs_mx_2_rdpm, &qhs_mx_rdpm, &qhs_pcie_rscc, &qhs_pdm, &qhs_qdss_cfg, &qhs_qspi, &qhs_qup1, &qhs_qup0, &qhs_sdc2, &qhs_tcsr, &qhs_tlmm, &qhs_ufs_mem_cfg, &qhs_usb3_0, &qhs_venus_cfg, &qhs_vsense_ctrl_cfg, &qhs_wlan_q6, &qss_mnoc_hf_cfg, &qss_mnoc_sf_cfg, &qss_nsp_qtb_cfg, &qss_pcie_anoc_cfg, &qss_wlan_q6_throttle_cfg, &srvc_cnoc_cfg, &xs_qdss_stm, &xs_sys_tcu_cfg },
++};
++
++static struct qcom_icc_node qhs_ahb2phy0 = {
++	.name = "qhs_ahb2phy0",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_ahb2phy1 = {
++	.name = "qhs_ahb2phy1",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_camera_cfg = {
++	.name = "qhs_camera_cfg",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_clk_ctl = {
++	.name = "qhs_clk_ctl",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_cpr_cx = {
++	.name = "qhs_cpr_cx",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_cpr_mmcx = {
++	.name = "qhs_cpr_mmcx",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_cpr_mxc = {
++	.name = "qhs_cpr_mxc",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_cpr_nspcx = {
++	.name = "qhs_cpr_nspcx",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_crypto0_cfg = {
++	.name = "qhs_crypto0_cfg",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_cx_rdpm = {
++	.name = "qhs_cx_rdpm",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_gpuss_cfg = {
++	.name = "qhs_gpuss_cfg",
++	.channels = 1,
++	.buswidth = 8,
++};
++
++static struct qcom_icc_node qhs_i3c_ibi0_cfg = {
++	.name = "qhs_i3c_ibi0_cfg",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_i3c_ibi1_cfg = {
++	.name = "qhs_i3c_ibi1_cfg",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_imem_cfg = {
++	.name = "qhs_imem_cfg",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_mss_cfg = {
++	.name = "qhs_mss_cfg",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_mx_2_rdpm = {
++	.name = "qhs_mx_2_rdpm",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_mx_rdpm = {
++	.name = "qhs_mx_rdpm",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_pcie_rscc = {
++	.name = "qhs_pcie_rscc",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_pdm = {
++	.name = "qhs_pdm",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_qdss_cfg = {
++	.name = "qhs_qdss_cfg",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_qspi = {
++	.name = "qhs_qspi",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_qup0 = {
++	.name = "qhs_qup0",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_qup1 = {
++	.name = "qhs_qup1",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_sdc2 = {
++	.name = "qhs_sdc2",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_tcsr = {
++	.name = "qhs_tcsr",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_tlmm = {
++	.name = "qhs_tlmm",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_ufs_mem_cfg = {
++	.name = "qhs_ufs_mem_cfg",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_usb3_0 = {
++	.name = "qhs_usb3_0",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_venus_cfg = {
++	.name = "qhs_venus_cfg",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_vsense_ctrl_cfg = {
++	.name = "qhs_vsense_ctrl_cfg",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_wlan_q6 = {
++	.name = "qhs_wlan_q6",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qss_mnoc_hf_cfg = {
++	.name = "qss_mnoc_hf_cfg",
++	.channels = 1,
++	.buswidth = 4,
++	.num_links = 1,
++	.link_nodes = { &qsm_hf_mnoc_cfg },
++};
++
++static struct qcom_icc_node qss_mnoc_sf_cfg = {
++	.name = "qss_mnoc_sf_cfg",
++	.channels = 1,
++	.buswidth = 4,
++	.num_links = 1,
++	.link_nodes = { &qsm_sf_mnoc_cfg },
++};
++
++static struct qcom_icc_node qss_nsp_qtb_cfg = {
++	.name = "qss_nsp_qtb_cfg",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qss_pcie_anoc_cfg = {
++	.name = "qss_pcie_anoc_cfg",
++	.channels = 1,
++	.buswidth = 4,
++	.num_links = 1,
++	.link_nodes = { &qsm_pcie_anoc_cfg },
++};
++
++static struct qcom_icc_node qss_wlan_q6_throttle_cfg = {
++	.name = "qss_wlan_q6_throttle_cfg",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node srvc_cnoc_cfg = {
++	.name = "srvc_cnoc_cfg",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node xs_qdss_stm = {
++	.name = "xs_qdss_stm",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node xs_sys_tcu_cfg = {
++	.name = "xs_sys_tcu_cfg",
++	.channels = 1,
++	.buswidth = 8,
++};
++
++static struct qcom_icc_node qnm_gemnoc_cnoc = {
++	.name = "qnm_gemnoc_cnoc",
++	.channels = 1,
++	.buswidth = 16,
++	.num_links = 12,
++	.link_nodes = { &qhs_aoss, &qhs_display_cfg, &qhs_ipa, &qhs_ipc_router, &qhs_pcie0_cfg, &qhs_prng, &qhs_tme_cfg, &qss_apss, &qss_cfg, &qss_ddrss_cfg, &qxs_imem, &srvc_cnoc_main },
++};
++
++static struct qcom_icc_node qnm_gemnoc_pcie = {
++	.name = "qnm_gemnoc_pcie",
++	.channels = 1,
++	.buswidth = 8,
++	.num_links = 1,
++	.link_nodes = { &xs_pcie_0 },
++};
++
++static struct qcom_icc_node qhs_aoss = {
++	.name = "qhs_aoss",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_display_cfg = {
++	.name = "qhs_display_cfg",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_ipa = {
++	.name = "qhs_ipa",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_ipc_router = {
++	.name = "qhs_ipc_router",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_pcie0_cfg = {
++	.name = "qhs_pcie0_cfg",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_prng = {
++	.name = "qhs_prng",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qhs_tme_cfg = {
++	.name = "qhs_tme_cfg",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qss_apss = {
++	.name = "qss_apss",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qss_cfg = {
++	.name = "qss_cfg",
++	.channels = 1,
++	.buswidth = 4,
++	.num_links = 1,
++	.link_nodes = { &qsm_cfg },
++};
++
++static struct qcom_icc_node qss_ddrss_cfg = {
++	.name = "qss_ddrss_cfg",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qxs_imem = {
++	.name = "qxs_imem",
++	.channels = 1,
++	.buswidth = 8,
++};
++
++static struct qcom_icc_node srvc_cnoc_main = {
++	.name = "srvc_cnoc_main",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node xs_pcie_0 = {
++	.name = "xs_pcie_0",
++	.channels = 1,
++	.buswidth = 8,
++};
++
++static struct qcom_icc_node alm_gpu_tcu = {
++	.name = "alm_gpu_tcu",
++	.channels = 1,
++	.buswidth = 8,
++	.num_links = 2,
++	.link_nodes = { &qns_gem_noc_cnoc, &qns_llcc },
++};
++
++static struct qcom_icc_node alm_sys_tcu = {
++	.name = "alm_sys_tcu",
++	.channels = 1,
++	.buswidth = 8,
++	.num_links = 2,
++	.link_nodes = { &qns_gem_noc_cnoc, &qns_llcc },
++};
++
++static struct qcom_icc_node chm_apps = {
++	.name = "chm_apps",
++	.channels = 3,
++	.buswidth = 32,
++	.num_links = 3,
++	.link_nodes = { &qns_gem_noc_cnoc, &qns_llcc, &qns_pcie },
++};
++
++static struct qcom_icc_node qnm_gpu = {
++	.name = "qnm_gpu",
++	.channels = 2,
++	.buswidth = 32,
++	.num_links = 2,
++	.link_nodes = { &qns_gem_noc_cnoc, &qns_llcc },
++};
++
++static struct qcom_icc_node qnm_lpass_gemnoc = {
++	.name = "qnm_lpass_gemnoc",
++	.channels = 1,
++	.buswidth = 16,
++	.num_links = 3,
++	.link_nodes = { &qns_gem_noc_cnoc, &qns_llcc, &qns_pcie },
++};
++
++static struct qcom_icc_node qnm_mdsp = {
++	.name = "qnm_mdsp",
++	.channels = 1,
++	.buswidth = 16,
++	.num_links = 3,
++	.link_nodes = { &qns_gem_noc_cnoc, &qns_llcc, &qns_pcie },
++};
++
++static struct qcom_icc_node qnm_mnoc_hf = {
++	.name = "qnm_mnoc_hf",
++	.channels = 2,
++	.buswidth = 32,
++	.num_links = 2,
++	.link_nodes = { &qns_gem_noc_cnoc, &qns_llcc },
++};
++
++static struct qcom_icc_node qnm_mnoc_sf = {
++	.name = "qnm_mnoc_sf",
++	.channels = 2,
++	.buswidth = 32,
++	.num_links = 2,
++	.link_nodes = { &qns_gem_noc_cnoc, &qns_llcc },
++};
++
++static struct qcom_icc_node qnm_nsp_gemnoc = {
++	.name = "qnm_nsp_gemnoc",
++	.channels = 2,
++	.buswidth = 32,
++	.num_links = 3,
++	.link_nodes = { &qns_gem_noc_cnoc, &qns_llcc, &qns_pcie },
++};
++
++static struct qcom_icc_node qnm_pcie = {
++	.name = "qnm_pcie",
++	.channels = 1,
++	.buswidth = 8,
++	.num_links = 2,
++	.link_nodes = { &qns_gem_noc_cnoc, &qns_llcc },
++};
++
++static struct qcom_icc_node qnm_snoc_sf = {
++	.name = "qnm_snoc_sf",
++	.channels = 1,
++	.buswidth = 16,
++	.num_links = 3,
++	.link_nodes = { &qns_gem_noc_cnoc, &qns_llcc, &qns_pcie },
++};
++
++static struct qcom_icc_node qxm_wlan_q6 = {
++	.name = "qxm_wlan_q6",
++	.channels = 1,
++	.buswidth = 8,
++	.num_links = 3,
++	.link_nodes = { &qns_gem_noc_cnoc, &qns_llcc, &qns_pcie },
++};
++
++static struct qcom_icc_node xm_gic = {
++	.name = "xm_gic",
++	.channels = 1,
++	.buswidth = 8,
++	.num_links = 1,
++	.link_nodes = { &qns_llcc },
++};
++
++static struct qcom_icc_node qns_gem_noc_cnoc = {
++	.name = "qns_gem_noc_cnoc",
++	.channels = 1,
++	.buswidth = 16,
++	.num_links = 1,
++	.link_nodes = { &qnm_gemnoc_cnoc },
++};
++
++static struct qcom_icc_node qns_llcc = {
++	.name = "qns_llcc",
++	.channels = 4,
++	.buswidth = 16,
++	.num_links = 1,
++	.link_nodes = { &llcc_mc },
++};
++
++static struct qcom_icc_node qns_pcie = {
++	.name = "qns_pcie",
++	.channels = 1,
++	.buswidth = 8,
++	.num_links = 1,
++	.link_nodes = { &qnm_gemnoc_pcie },
++};
++
++static struct qcom_icc_node qnm_lpiaon_noc = {
++	.name = "qnm_lpiaon_noc",
++	.channels = 1,
++	.buswidth = 16,
++	.num_links = 1,
++	.link_nodes = { &qns_lpass_ag_noc_gemnoc },
++};
++
++static struct qcom_icc_node qns_lpass_ag_noc_gemnoc = {
++	.name = "qns_lpass_ag_noc_gemnoc",
++	.channels = 1,
++	.buswidth = 16,
++	.num_links = 1,
++	.link_nodes = { &qnm_lpass_gemnoc },
++};
++
++static struct qcom_icc_node qnm_lpass_lpinoc = {
++	.name = "qnm_lpass_lpinoc",
++	.channels = 1,
++	.buswidth = 16,
++	.num_links = 1,
++	.link_nodes = { &qns_lpass_aggnoc },
++};
++
++static struct qcom_icc_node qns_lpass_aggnoc = {
++	.name = "qns_lpass_aggnoc",
++	.channels = 1,
++	.buswidth = 16,
++	.num_links = 1,
++	.link_nodes = { &qnm_lpiaon_noc },
++};
++
++static struct qcom_icc_node qxm_lpinoc_dsp_axim = {
++	.name = "qxm_lpinoc_dsp_axim",
++	.channels = 1,
++	.buswidth = 16,
++	.num_links = 1,
++	.link_nodes = { &qns_lpi_aon_noc },
++};
++
++static struct qcom_icc_node qns_lpi_aon_noc = {
++	.name = "qns_lpi_aon_noc",
++	.channels = 1,
++	.buswidth = 16,
++	.num_links = 1,
++	.link_nodes = { &qnm_lpass_lpinoc },
++};
++
++static struct qcom_icc_node llcc_mc = {
++	.name = "llcc_mc",
++	.channels = 4,
++	.buswidth = 4,
++	.num_links = 1,
++	.link_nodes = { &ebi },
++};
++
++static struct qcom_icc_node ebi = {
++	.name = "ebi",
++	.channels = 4,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qnm_camnoc_hf = {
++	.name = "qnm_camnoc_hf",
++	.channels = 2,
++	.buswidth = 32,
++	.num_links = 1,
++	.link_nodes = { &qns_mem_noc_hf },
++};
++
++static struct qcom_icc_node qnm_camnoc_icp = {
++	.name = "qnm_camnoc_icp",
++	.channels = 1,
++	.buswidth = 8,
++	.num_links = 1,
++	.link_nodes = { &qns_mem_noc_sf },
++};
++
++static struct qcom_icc_node qnm_camnoc_sf = {
++	.name = "qnm_camnoc_sf",
++	.channels = 2,
++	.buswidth = 32,
++	.num_links = 1,
++	.link_nodes = { &qns_mem_noc_sf },
++};
++
++static struct qcom_icc_node qnm_mdp = {
++	.name = "qnm_mdp",
++	.channels = 2,
++	.buswidth = 32,
++	.num_links = 1,
++	.link_nodes = { &qns_mem_noc_hf },
++};
++
++static struct qcom_icc_node qnm_video = {
++	.name = "qnm_video",
++	.channels = 1,
++	.buswidth = 32,
++	.num_links = 1,
++	.link_nodes = { &qns_mem_noc_sf },
++};
++
++static struct qcom_icc_node qnm_video_cv_cpu = {
++	.name = "qnm_video_cv_cpu",
++	.channels = 1,
++	.buswidth = 8,
++	.num_links = 1,
++	.link_nodes = { &qns_mem_noc_sf },
++};
++
++static struct qcom_icc_node qnm_video_cvp = {
++	.name = "qnm_video_cvp",
++	.channels = 1,
++	.buswidth = 32,
++	.num_links = 1,
++	.link_nodes = { &qns_mem_noc_sf },
++};
++
++static struct qcom_icc_node qnm_video_v_cpu = {
++	.name = "qnm_video_v_cpu",
++	.channels = 1,
++	.buswidth = 8,
++	.num_links = 1,
++	.link_nodes = { &qns_mem_noc_sf },
++};
++
++static struct qcom_icc_node qsm_hf_mnoc_cfg = {
++	.name = "qsm_hf_mnoc_cfg",
++	.channels = 1,
++	.buswidth = 4,
++	.num_links = 1,
++	.link_nodes = { &srvc_mnoc_hf },
++};
++
++static struct qcom_icc_node qsm_sf_mnoc_cfg = {
++	.name = "qsm_sf_mnoc_cfg",
++	.channels = 1,
++	.buswidth = 4,
++	.num_links = 1,
++	.link_nodes = { &srvc_mnoc_sf },
++};
++
++static struct qcom_icc_node qns_mem_noc_hf = {
++	.name = "qns_mem_noc_hf",
++	.channels = 2,
++	.buswidth = 32,
++	.num_links = 1,
++	.link_nodes = { &qnm_mnoc_hf },
++};
++
++static struct qcom_icc_node qns_mem_noc_sf = {
++	.name = "qns_mem_noc_sf",
++	.channels = 2,
++	.buswidth = 32,
++	.num_links = 1,
++	.link_nodes = { &qnm_mnoc_sf },
++};
++
++static struct qcom_icc_node srvc_mnoc_hf = {
++	.name = "srvc_mnoc_hf",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node srvc_mnoc_sf = {
++	.name = "srvc_mnoc_sf",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qxm_nsp = {
++	.name = "qxm_nsp",
++	.channels = 2,
++	.buswidth = 32,
++	.num_links = 1,
++	.link_nodes = { &qns_nsp_gemnoc },
++};
++
++static struct qcom_icc_node qns_nsp_gemnoc = {
++	.name = "qns_nsp_gemnoc",
++	.channels = 2,
++	.buswidth = 32,
++	.num_links = 1,
++	.link_nodes = { &qnm_nsp_gemnoc },
++};
++
++static struct qcom_icc_node qsm_pcie_anoc_cfg = {
++	.name = "qsm_pcie_anoc_cfg",
++	.channels = 1,
++	.buswidth = 4,
++	.num_links = 1,
++	.link_nodes = { &srvc_pcie_aggre_noc },
++};
++
++static struct qcom_icc_node xm_pcie3_0 = {
++	.name = "xm_pcie3_0",
++	.channels = 1,
++	.buswidth = 8,
++	.num_links = 1,
++	.link_nodes = { &qns_pcie_mem_noc },
++};
++
++static struct qcom_icc_node qns_pcie_mem_noc = {
++	.name = "qns_pcie_mem_noc",
++	.channels = 1,
++	.buswidth = 8,
++	.num_links = 1,
++	.link_nodes = { &qnm_pcie },
++};
++
++static struct qcom_icc_node srvc_pcie_aggre_noc = {
++	.name = "srvc_pcie_aggre_noc",
++	.channels = 1,
++	.buswidth = 4,
++};
++
++static struct qcom_icc_node qnm_aggre1_noc = {
++	.name = "qnm_aggre1_noc",
++	.channels = 1,
++	.buswidth = 16,
++	.num_links = 1,
++	.link_nodes = { &qns_gemnoc_sf },
++};
++
++static struct qcom_icc_node qnm_aggre2_noc = {
++	.name = "qnm_aggre2_noc",
++	.channels = 1,
++	.buswidth = 16,
++	.num_links = 1,
++	.link_nodes = { &qns_gemnoc_sf },
++};
++
++static struct qcom_icc_node qnm_apss_noc = {
++	.name = "qnm_apss_noc",
++	.channels = 1,
++	.buswidth = 4,
++	.num_links = 1,
++	.link_nodes = { &qns_gemnoc_sf },
++};
++
++static struct qcom_icc_node qnm_cnoc_data = {
++	.name = "qnm_cnoc_data",
++	.channels = 1,
++	.buswidth = 8,
++	.num_links = 1,
++	.link_nodes = { &qns_gemnoc_sf },
++};
++
++static struct qcom_icc_node qns_gemnoc_sf = {
++	.name = "qns_gemnoc_sf",
++	.channels = 1,
++	.buswidth = 16,
++	.num_links = 1,
++	.link_nodes = { &qnm_snoc_sf },
++};
++
++static struct qcom_icc_bcm bcm_ce0 = {
++	.name = "CE0",
++	.num_nodes = 1,
++	.nodes = { &qxm_crypto },
++};
++
++static struct qcom_icc_bcm bcm_qup0 = {
++	.name = "QUP0",
++	.vote_scale = 1,
++	.keepalive = true,
++	.num_nodes = 1,
++	.nodes = { &qup0_core_slave },
++};
++
++static struct qcom_icc_bcm bcm_qup1 = {
++	.name = "QUP1",
++	.vote_scale = 1,
++	.keepalive = true,
++	.num_nodes = 1,
++	.nodes = { &qup1_core_slave },
++};
++
++static struct qcom_icc_bcm bcm_cn0 = {
++	.name = "CN0",
++	.enable_mask = BIT(0),
++	.keepalive = true,
++	.num_nodes = 52,
++	.nodes = { &qsm_cfg, &qhs_ahb2phy0, &qhs_ahb2phy1, &qhs_camera_cfg, &qhs_clk_ctl, &qhs_cpr_cx, &qhs_cpr_mmcx, &qhs_cpr_mxc, &qhs_cpr_nspcx, &qhs_crypto0_cfg, &qhs_cx_rdpm, &qhs_gpuss_cfg, &qhs_i3c_ibi0_cfg, &qhs_i3c_ibi1_cfg, &qhs_imem_cfg, &qhs_mss_cfg, &qhs_mx_2_rdpm, &qhs_mx_rdpm, &qhs_pcie_rscc, &qhs_pdm, &qhs_qdss_cfg, &qhs_qspi, &qhs_sdc2, &qhs_tcsr, &qhs_tlmm, &qhs_ufs_mem_cfg, &qhs_usb3_0, &qhs_venus_cfg, &qhs_vsense_ctrl_cfg, &qhs_wlan_q6, &qss_mnoc_hf_cfg, &qss_mnoc_sf_cfg, &qss_nsp_qtb_cfg, &qss_pcie_anoc_cfg, &qss_wlan_q6_throttle_cfg, &srvc_cnoc_cfg, &xs_qdss_stm, &xs_sys_tcu_cfg, &qnm_gemnoc_cnoc, &qnm_gemnoc_pcie, &qhs_aoss, &qhs_ipa, &qhs_ipc_router, &qhs_pcie0_cfg, &qhs_prng, &qhs_tme_cfg, &qss_apss, &qss_cfg, &qss_ddrss_cfg, &qxs_imem, &srvc_cnoc_main, &xs_pcie_0 },
++};
++
++static struct qcom_icc_bcm bcm_cn1 = {
++	.name = "CN1",
++	.num_nodes = 3,
++	.nodes = { &qhs_qup0, &qhs_qup1, &qhs_display_cfg },
++};
++
++static struct qcom_icc_bcm bcm_sh0 = {
++	.name = "SH0",
++	.keepalive = true,
++	.num_nodes = 1,
++	.nodes = { &qns_llcc },
++};
++
++static struct qcom_icc_bcm bcm_sh1 = {
++	.name = "SH1",
++	.enable_mask = BIT(0),
++	.num_nodes = 14,
++	.nodes = { &alm_gpu_tcu, &alm_sys_tcu, &chm_apps, &qnm_gpu, &qnm_mdsp, &qnm_mnoc_hf, &qnm_mnoc_sf, &qnm_nsp_gemnoc, &qnm_pcie, &qnm_snoc_sf, &qxm_wlan_q6, &xm_gic, &qns_gem_noc_cnoc, &qns_pcie },
++};
++
++static struct qcom_icc_bcm bcm_lp0 = {
++	.name = "LP0",
++	.num_nodes = 2,
++	.nodes = { &qnm_lpass_lpinoc, &qns_lpass_aggnoc },
++};
++
++static struct qcom_icc_bcm bcm_acv = {
++	.name = "ACV",
++	.enable_mask = BIT(0),
++	.num_nodes = 1,
++	.nodes = { &ebi },
++};
++
++static struct qcom_icc_bcm bcm_mc0 = {
++	.name = "MC0",
++	.keepalive = true,
++	.num_nodes = 1,
++	.nodes = { &ebi },
++};
++
++static struct qcom_icc_bcm bcm_mm0 = {
++	.name = "MM0",
++	.num_nodes = 1,
++	.nodes = { &qns_mem_noc_hf },
++};
++
++static struct qcom_icc_bcm bcm_mm1 = {
++	.name = "MM1",
++	.enable_mask = BIT(0),
++	.num_nodes = 7,
++	.nodes = { &qnm_camnoc_hf, &qnm_camnoc_icp, &qnm_camnoc_sf, &qnm_video_cv_cpu, &qnm_video_cvp, &qnm_video_v_cpu, &qns_mem_noc_sf },
++};
++
++static struct qcom_icc_bcm bcm_co0 = {
++	.name = "CO0",
++	.enable_mask = BIT(0),
++	.num_nodes = 2,
++	.nodes = { &qxm_nsp, &qns_nsp_gemnoc },
++};
++
++static struct qcom_icc_bcm bcm_sn4 = {
++	.name = "SN4",
++	.num_nodes = 1,
++	.nodes = { &qns_pcie_mem_noc },
++};
++
++static struct qcom_icc_bcm bcm_sn0 = {
++	.name = "SN0",
++	.keepalive = true,
++	.num_nodes = 1,
++	.nodes = { &qns_gemnoc_sf },
++};
++
++static struct qcom_icc_bcm bcm_sn2 = {
++	.name = "SN2",
++	.num_nodes = 1,
++	.nodes = { &qnm_aggre1_noc },
++};
++
++static struct qcom_icc_bcm bcm_sn3 = {
++	.name = "SN3",
++	.num_nodes = 1,
++	.nodes = { &qnm_aggre2_noc },
++};
++
++static struct qcom_icc_node * const aggre1_noc_nodes[] = {
++	[SM8635_AGGRE1_NOC_QHM_QSPI] = &qhm_qspi,
++	[SM8635_AGGRE1_NOC_QHM_QUP0] = &qhm_qup0,
++	[SM8635_AGGRE1_NOC_XM_SDC2] = &xm_sdc2,
++	[SM8635_AGGRE1_NOC_XM_UFS_MEM] = &xm_ufs_mem,
++	[SM8635_AGGRE1_NOC_XM_USB3_0] = &xm_usb3_0,
++	[SM8635_AGGRE1_NOC_QNS_A1NOC_SNOC] = &qns_a1noc_snoc,
++};
++
++static const struct qcom_icc_desc sm8635_aggre1_noc = {
++	.nodes = aggre1_noc_nodes,
++	.num_nodes = ARRAY_SIZE(aggre1_noc_nodes),
++};
++
++static struct qcom_icc_bcm * const aggre2_noc_bcms[] = {
++	&bcm_ce0,
++};
++
++static struct qcom_icc_node * const aggre2_noc_nodes[] = {
++	[SM8635_AGGRE2_NOC_QHM_QDSS_BAM] = &qhm_qdss_bam,
++	[SM8635_AGGRE2_NOC_QHM_QUP1] = &qhm_qup1,
++	[SM8635_AGGRE2_NOC_QXM_CRYPTO] = &qxm_crypto,
++	[SM8635_AGGRE2_NOC_QXM_IPA] = &qxm_ipa,
++	[SM8635_AGGRE2_NOC_XM_QDSS_ETR_0] = &xm_qdss_etr_0,
++	[SM8635_AGGRE2_NOC_XM_QDSS_ETR_1] = &xm_qdss_etr_1,
++	[SM8635_AGGRE2_NOC_QNS_A2NOC_SNOC] = &qns_a2noc_snoc,
++};
++
++static const struct qcom_icc_desc sm8635_aggre2_noc = {
++	.nodes = aggre2_noc_nodes,
++	.num_nodes = ARRAY_SIZE(aggre2_noc_nodes),
++	.bcms = aggre2_noc_bcms,
++	.num_bcms = ARRAY_SIZE(aggre2_noc_bcms),
++};
++
++static struct qcom_icc_bcm * const clk_virt_bcms[] = {
++	&bcm_qup0,
++	&bcm_qup1,
++};
++
++static struct qcom_icc_node * const clk_virt_nodes[] = {
++	[SM8635_CLK_VIRT_QUP0_CORE_MASTER] = &qup0_core_master,
++	[SM8635_CLK_VIRT_QUP1_CORE_MASTER] = &qup1_core_master,
++	[SM8635_CLK_VIRT_QUP0_CORE_SLAVE] = &qup0_core_slave,
++	[SM8635_CLK_VIRT_QUP1_CORE_SLAVE] = &qup1_core_slave,
++};
++
++static const struct qcom_icc_desc sm8635_clk_virt = {
++	.nodes = clk_virt_nodes,
++	.num_nodes = ARRAY_SIZE(clk_virt_nodes),
++	.bcms = clk_virt_bcms,
++	.num_bcms = ARRAY_SIZE(clk_virt_bcms),
++};
++
++static struct qcom_icc_bcm * const config_noc_bcms[] = {
++	&bcm_cn0,
++	&bcm_cn1,
++};
++
++static struct qcom_icc_node * const config_noc_nodes[] = {
++	[SM8635_CONFIG_NOC_QSM_CFG] = &qsm_cfg,
++	[SM8635_CONFIG_NOC_QHS_AHB2PHY0] = &qhs_ahb2phy0,
++	[SM8635_CONFIG_NOC_QHS_AHB2PHY1] = &qhs_ahb2phy1,
++	[SM8635_CONFIG_NOC_QHS_CAMERA_CFG] = &qhs_camera_cfg,
++	[SM8635_CONFIG_NOC_QHS_CLK_CTL] = &qhs_clk_ctl,
++	[SM8635_CONFIG_NOC_QHS_CPR_CX] = &qhs_cpr_cx,
++	[SM8635_CONFIG_NOC_QHS_CPR_MMCX] = &qhs_cpr_mmcx,
++	[SM8635_CONFIG_NOC_QHS_CPR_MXC] = &qhs_cpr_mxc,
++	[SM8635_CONFIG_NOC_QHS_CPR_NSPCX] = &qhs_cpr_nspcx,
++	[SM8635_CONFIG_NOC_QHS_CRYPTO0_CFG] = &qhs_crypto0_cfg,
++	[SM8635_CONFIG_NOC_QHS_CX_RDPM] = &qhs_cx_rdpm,
++	[SM8635_CONFIG_NOC_QHS_GPUSS_CFG] = &qhs_gpuss_cfg,
++	[SM8635_CONFIG_NOC_QHS_I3C_IBI0_CFG] = &qhs_i3c_ibi0_cfg,
++	[SM8635_CONFIG_NOC_QHS_I3C_IBI1_CFG] = &qhs_i3c_ibi1_cfg,
++	[SM8635_CONFIG_NOC_QHS_IMEM_CFG] = &qhs_imem_cfg,
++	[SM8635_CONFIG_NOC_QHS_MSS_CFG] = &qhs_mss_cfg,
++	[SM8635_CONFIG_NOC_QHS_MX_2_RDPM] = &qhs_mx_2_rdpm,
++	[SM8635_CONFIG_NOC_QHS_MX_RDPM] = &qhs_mx_rdpm,
++	[SM8635_CONFIG_NOC_QHS_PCIE_RSCC] = &qhs_pcie_rscc,
++	[SM8635_CONFIG_NOC_QHS_PDM] = &qhs_pdm,
++	[SM8635_CONFIG_NOC_QHS_QDSS_CFG] = &qhs_qdss_cfg,
++	[SM8635_CONFIG_NOC_QHS_QSPI] = &qhs_qspi,
++	[SM8635_CONFIG_NOC_QHS_QUP0] = &qhs_qup0,
++	[SM8635_CONFIG_NOC_QHS_QUP1] = &qhs_qup1,
++	[SM8635_CONFIG_NOC_QHS_SDC2] = &qhs_sdc2,
++	[SM8635_CONFIG_NOC_QHS_TCSR] = &qhs_tcsr,
++	[SM8635_CONFIG_NOC_QHS_TLMM] = &qhs_tlmm,
++	[SM8635_CONFIG_NOC_QHS_UFS_MEM_CFG] = &qhs_ufs_mem_cfg,
++	[SM8635_CONFIG_NOC_QHS_USB3_0] = &qhs_usb3_0,
++	[SM8635_CONFIG_NOC_QHS_VENUS_CFG] = &qhs_venus_cfg,
++	[SM8635_CONFIG_NOC_QHS_VSENSE_CTRL_CFG] = &qhs_vsense_ctrl_cfg,
++	[SM8635_CONFIG_NOC_QHS_WLAN_Q6] = &qhs_wlan_q6,
++	[SM8635_CONFIG_NOC_QSS_MNOC_HF_CFG] = &qss_mnoc_hf_cfg,
++	[SM8635_CONFIG_NOC_QSS_MNOC_SF_CFG] = &qss_mnoc_sf_cfg,
++	[SM8635_CONFIG_NOC_QSS_NSP_QTB_CFG] = &qss_nsp_qtb_cfg,
++	[SM8635_CONFIG_NOC_QSS_PCIE_ANOC_CFG] = &qss_pcie_anoc_cfg,
++	[SM8635_CONFIG_NOC_QSS_WLAN_Q6_THROTTLE_CFG] = &qss_wlan_q6_throttle_cfg,
++	[SM8635_CONFIG_NOC_SRVC_CNOC_CFG] = &srvc_cnoc_cfg,
++	[SM8635_CONFIG_NOC_XS_QDSS_STM] = &xs_qdss_stm,
++	[SM8635_CONFIG_NOC_XS_SYS_TCU_CFG] = &xs_sys_tcu_cfg,
++};
++
++static const struct qcom_icc_desc sm8635_config_noc = {
++	.nodes = config_noc_nodes,
++	.num_nodes = ARRAY_SIZE(config_noc_nodes),
++	.bcms = config_noc_bcms,
++	.num_bcms = ARRAY_SIZE(config_noc_bcms),
++};
++
++static struct qcom_icc_bcm * const cnoc_main_bcms[] = {
++	&bcm_cn0,
++	&bcm_cn1,
++};
++
++static struct qcom_icc_node * const cnoc_main_nodes[] = {
++	[SM8635_CNOC_MAIN_QNM_GEMNOC_CNOC] = &qnm_gemnoc_cnoc,
++	[SM8635_CNOC_MAIN_QNM_GEMNOC_PCIE] = &qnm_gemnoc_pcie,
++	[SM8635_CNOC_MAIN_QHS_AOSS] = &qhs_aoss,
++	[SM8635_CNOC_MAIN_QHS_DISPLAY_CFG] = &qhs_display_cfg,
++	[SM8635_CNOC_MAIN_QHS_IPA] = &qhs_ipa,
++	[SM8635_CNOC_MAIN_QHS_IPC_ROUTER] = &qhs_ipc_router,
++	[SM8635_CNOC_MAIN_QHS_PCIE0_CFG] = &qhs_pcie0_cfg,
++	[SM8635_CNOC_MAIN_QHS_PRNG] = &qhs_prng,
++	[SM8635_CNOC_MAIN_QHS_TME_CFG] = &qhs_tme_cfg,
++	[SM8635_CNOC_MAIN_QSS_APSS] = &qss_apss,
++	[SM8635_CNOC_MAIN_QSS_CFG] = &qss_cfg,
++	[SM8635_CNOC_MAIN_QSS_DDRSS_CFG] = &qss_ddrss_cfg,
++	[SM8635_CNOC_MAIN_QXS_IMEM] = &qxs_imem,
++	[SM8635_CNOC_MAIN_SRVC_CNOC_MAIN] = &srvc_cnoc_main,
++	[SM8635_CNOC_MAIN_XS_PCIE_0] = &xs_pcie_0,
++};
++
++static const struct qcom_icc_desc sm8635_cnoc_main = {
++	.nodes = cnoc_main_nodes,
++	.num_nodes = ARRAY_SIZE(cnoc_main_nodes),
++	.bcms = cnoc_main_bcms,
++	.num_bcms = ARRAY_SIZE(cnoc_main_bcms),
++};
++
++static struct qcom_icc_bcm * const gem_noc_bcms[] = {
++	&bcm_sh0,
++	&bcm_sh1,
++};
++
++static struct qcom_icc_node * const gem_noc_nodes[] = {
++	[SM8635_GEM_NOC_ALM_GPU_TCU] = &alm_gpu_tcu,
++	[SM8635_GEM_NOC_ALM_SYS_TCU] = &alm_sys_tcu,
++	[SM8635_GEM_NOC_CHM_APPS] = &chm_apps,
++	[SM8635_GEM_NOC_QNM_GPU] = &qnm_gpu,
++	[SM8635_GEM_NOC_QNM_LPASS_GEMNOC] = &qnm_lpass_gemnoc,
++	[SM8635_GEM_NOC_QNM_MDSP] = &qnm_mdsp,
++	[SM8635_GEM_NOC_QNM_MNOC_HF] = &qnm_mnoc_hf,
++	[SM8635_GEM_NOC_QNM_MNOC_SF] = &qnm_mnoc_sf,
++	[SM8635_GEM_NOC_QNM_NSP_GEMNOC] = &qnm_nsp_gemnoc,
++	[SM8635_GEM_NOC_QNM_PCIE] = &qnm_pcie,
++	[SM8635_GEM_NOC_QNM_SNOC_SF] = &qnm_snoc_sf,
++	[SM8635_GEM_NOC_QXM_WLAN_Q6] = &qxm_wlan_q6,
++	[SM8635_GEM_NOC_XM_GIC] = &xm_gic,
++	[SM8635_GEM_NOC_QNS_GEM_NOC_CNOC] = &qns_gem_noc_cnoc,
++	[SM8635_GEM_NOC_QNS_LLCC] = &qns_llcc,
++	[SM8635_GEM_NOC_QNS_PCIE] = &qns_pcie,
++};
++
++static const struct qcom_icc_desc sm8635_gem_noc = {
++	.nodes = gem_noc_nodes,
++	.num_nodes = ARRAY_SIZE(gem_noc_nodes),
++	.bcms = gem_noc_bcms,
++	.num_bcms = ARRAY_SIZE(gem_noc_bcms),
++};
++
++static struct qcom_icc_node * const lpass_ag_noc_nodes[] = {
++	[SM8635_LPASS_AG_NOC_QNM_LPIAON_NOC] = &qnm_lpiaon_noc,
++	[SM8635_LPASS_AG_NOC_QNS_LPASS_AG_NOC_GEMNOC] = &qns_lpass_ag_noc_gemnoc,
++};
++
++static const struct qcom_icc_desc sm8635_lpass_ag_noc = {
++	.nodes = lpass_ag_noc_nodes,
++	.num_nodes = ARRAY_SIZE(lpass_ag_noc_nodes),
++};
++
++static struct qcom_icc_bcm * const lpass_lpiaon_noc_bcms[] = {
++	&bcm_lp0,
++};
++
++static struct qcom_icc_node * const lpass_lpiaon_noc_nodes[] = {
++	[SM8635_LPASS_LPIAON_NOC_QNM_LPASS_LPINOC] = &qnm_lpass_lpinoc,
++	[SM8635_LPASS_LPIAON_NOC_QNS_LPASS_AGGNOC] = &qns_lpass_aggnoc,
++};
++
++static const struct qcom_icc_desc sm8635_lpass_lpiaon_noc = {
++	.nodes = lpass_lpiaon_noc_nodes,
++	.num_nodes = ARRAY_SIZE(lpass_lpiaon_noc_nodes),
++	.bcms = lpass_lpiaon_noc_bcms,
++	.num_bcms = ARRAY_SIZE(lpass_lpiaon_noc_bcms),
++};
++
++static struct qcom_icc_node * const lpass_lpicx_noc_nodes[] = {
++	[SM8635_LPASS_LPICX_NOC_QXM_LPINOC_DSP_AXIM] = &qxm_lpinoc_dsp_axim,
++	[SM8635_LPASS_LPICX_NOC_QNS_LPI_AON_NOC] = &qns_lpi_aon_noc,
++};
++
++static const struct qcom_icc_desc sm8635_lpass_lpicx_noc = {
++	.nodes = lpass_lpicx_noc_nodes,
++	.num_nodes = ARRAY_SIZE(lpass_lpicx_noc_nodes),
++};
++
++static struct qcom_icc_bcm * const mc_virt_bcms[] = {
++	&bcm_acv,
++	&bcm_mc0,
++};
++
++static struct qcom_icc_node * const mc_virt_nodes[] = {
++	[SM8635_MC_VIRT_LLCC_MC] = &llcc_mc,
++	[SM8635_MC_VIRT_EBI] = &ebi,
++};
++
++static const struct qcom_icc_desc sm8635_mc_virt = {
++	.nodes = mc_virt_nodes,
++	.num_nodes = ARRAY_SIZE(mc_virt_nodes),
++	.bcms = mc_virt_bcms,
++	.num_bcms = ARRAY_SIZE(mc_virt_bcms),
++};
++
++static struct qcom_icc_bcm * const mmss_noc_bcms[] = {
++	&bcm_mm0,
++	&bcm_mm1,
++};
++
++static struct qcom_icc_node * const mmss_noc_nodes[] = {
++	[SM8635_MMSS_NOC_QNM_CAMNOC_HF] = &qnm_camnoc_hf,
++	[SM8635_MMSS_NOC_QNM_CAMNOC_ICP] = &qnm_camnoc_icp,
++	[SM8635_MMSS_NOC_QNM_CAMNOC_SF] = &qnm_camnoc_sf,
++	[SM8635_MMSS_NOC_QNM_MDP] = &qnm_mdp,
++	[SM8635_MMSS_NOC_QNM_VIDEO] = &qnm_video,
++	[SM8635_MMSS_NOC_QNM_VIDEO_CV_CPU] = &qnm_video_cv_cpu,
++	[SM8635_MMSS_NOC_QNM_VIDEO_CVP] = &qnm_video_cvp,
++	[SM8635_MMSS_NOC_QNM_VIDEO_V_CPU] = &qnm_video_v_cpu,
++	[SM8635_MMSS_NOC_QSM_HF_MNOC_CFG] = &qsm_hf_mnoc_cfg,
++	[SM8635_MMSS_NOC_QSM_SF_MNOC_CFG] = &qsm_sf_mnoc_cfg,
++	[SM8635_MMSS_NOC_QNS_MEM_NOC_HF] = &qns_mem_noc_hf,
++	[SM8635_MMSS_NOC_QNS_MEM_NOC_SF] = &qns_mem_noc_sf,
++	[SM8635_MMSS_NOC_SRVC_MNOC_HF] = &srvc_mnoc_hf,
++	[SM8635_MMSS_NOC_SRVC_MNOC_SF] = &srvc_mnoc_sf,
++};
++
++static const struct qcom_icc_desc sm8635_mmss_noc = {
++	.nodes = mmss_noc_nodes,
++	.num_nodes = ARRAY_SIZE(mmss_noc_nodes),
++	.bcms = mmss_noc_bcms,
++	.num_bcms = ARRAY_SIZE(mmss_noc_bcms),
++};
++
++static struct qcom_icc_bcm * const nsp_noc_bcms[] = {
++	&bcm_co0,
++};
++
++static struct qcom_icc_node * const nsp_noc_nodes[] = {
++	[SM8635_NSP_NOC_QXM_NSP] = &qxm_nsp,
++	[SM8635_NSP_NOC_QNS_NSP_GEMNOC] = &qns_nsp_gemnoc,
++};
++
++static const struct qcom_icc_desc sm8635_nsp_noc = {
++	.nodes = nsp_noc_nodes,
++	.num_nodes = ARRAY_SIZE(nsp_noc_nodes),
++	.bcms = nsp_noc_bcms,
++	.num_bcms = ARRAY_SIZE(nsp_noc_bcms),
++};
++
++static struct qcom_icc_bcm * const pcie_anoc_bcms[] = {
++	&bcm_sn4,
++};
++
++static struct qcom_icc_node * const pcie_anoc_nodes[] = {
++	[SM8635_PCIE_ANOC_QSM_PCIE_ANOC_CFG] = &qsm_pcie_anoc_cfg,
++	[SM8635_PCIE_ANOC_XM_PCIE3_0] = &xm_pcie3_0,
++	[SM8635_PCIE_ANOC_QNS_PCIE_MEM_NOC] = &qns_pcie_mem_noc,
++	[SM8635_PCIE_ANOC_SRVC_PCIE_AGGRE_NOC] = &srvc_pcie_aggre_noc,
++};
++
++static const struct qcom_icc_desc sm8635_pcie_anoc = {
++	.nodes = pcie_anoc_nodes,
++	.num_nodes = ARRAY_SIZE(pcie_anoc_nodes),
++	.bcms = pcie_anoc_bcms,
++	.num_bcms = ARRAY_SIZE(pcie_anoc_bcms),
++};
++
++static struct qcom_icc_bcm * const system_noc_bcms[] = {
++	&bcm_sn0,
++	&bcm_sn2,
++	&bcm_sn3,
++};
++
++static struct qcom_icc_node * const system_noc_nodes[] = {
++	[SM8635_SYSTEM_NOC_QNM_AGGRE1_NOC] = &qnm_aggre1_noc,
++	[SM8635_SYSTEM_NOC_QNM_AGGRE2_NOC] = &qnm_aggre2_noc,
++	[SM8635_SYSTEM_NOC_QNM_APSS_NOC] = &qnm_apss_noc,
++	[SM8635_SYSTEM_NOC_QNM_CNOC_DATA] = &qnm_cnoc_data,
++	[SM8635_SYSTEM_NOC_QNS_GEMNOC_SF] = &qns_gemnoc_sf,
++};
++
++static const struct qcom_icc_desc sm8635_system_noc = {
++	.nodes = system_noc_nodes,
++	.num_nodes = ARRAY_SIZE(system_noc_nodes),
++	.bcms = system_noc_bcms,
++	.num_bcms = ARRAY_SIZE(system_noc_bcms),
++};
++
++static const struct of_device_id qnoc_of_match[] = {
++	{ .compatible = "qcom,sm8635-aggre1-noc", .data = &sm8635_aggre1_noc },
++	{ .compatible = "qcom,sm8635-aggre2-noc", .data = &sm8635_aggre2_noc },
++	{ .compatible = "qcom,sm8635-clk-virt", .data = &sm8635_clk_virt },
++	{ .compatible = "qcom,sm8635-config-noc", .data = &sm8635_config_noc },
++	{ .compatible = "qcom,sm8635-cnoc-main", .data = &sm8635_cnoc_main },
++	{ .compatible = "qcom,sm8635-gem-noc", .data = &sm8635_gem_noc },
++	{ .compatible = "qcom,sm8635-lpass-ag-noc", .data = &sm8635_lpass_ag_noc },
++	{ .compatible = "qcom,sm8635-lpass-lpiaon-noc", .data = &sm8635_lpass_lpiaon_noc },
++	{ .compatible = "qcom,sm8635-lpass-lpicx-noc", .data = &sm8635_lpass_lpicx_noc },
++	{ .compatible = "qcom,sm8635-mc-virt", .data = &sm8635_mc_virt },
++	{ .compatible = "qcom,sm8635-mmss-noc", .data = &sm8635_mmss_noc },
++	{ .compatible = "qcom,sm8635-nsp-noc", .data = &sm8635_nsp_noc },
++	{ .compatible = "qcom,sm8635-pcie-anoc", .data = &sm8635_pcie_anoc },
++	{ .compatible = "qcom,sm8635-system-noc", .data = &sm8635_system_noc },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, qnoc_of_match);
++
++static struct platform_driver qnoc_driver = {
++	.probe = qcom_icc_rpmh_probe,
++	.remove = qcom_icc_rpmh_remove,
++	.driver = {
++		.name = "qnoc-sm8635",
++		.of_match_table = qnoc_of_match,
++		/* Defer icc_sync_state until native MDSS and all consumers vote */
++	},
++};
++
++static int __init qnoc_driver_init(void)
++{
++	return platform_driver_register(&qnoc_driver);
++}
++core_initcall(qnoc_driver_init);
++
++static void __exit qnoc_driver_exit(void)
++{
++	platform_driver_unregister(&qnoc_driver);
++}
++module_exit(qnoc_driver_exit);
++
++MODULE_DESCRIPTION("SM8635 NoC driver");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/pinctrl/qcom/Makefile b/drivers/pinctrl/qcom/Makefile
+index a3daca77a..be9a896a6 100644
+--- a/drivers/pinctrl/qcom/Makefile
++++ b/drivers/pinctrl/qcom/Makefile
+@@ -82,6 +82,7 @@ obj-$(CONFIG_PINCTRL_SM8450_LPASS_LPI) += pinctrl-sm8450-lpass-lpi.o
+ obj-$(CONFIG_PINCTRL_SM8550) += pinctrl-sm8550.o
+ obj-$(CONFIG_PINCTRL_SM8550_LPASS_LPI) += pinctrl-sm8550-lpass-lpi.o
+ obj-$(CONFIG_PINCTRL_SM8650) += pinctrl-sm8650.o
++obj-$(CONFIG_PINCTRL_SM8650) += pinctrl-sm8635.o
+ obj-$(CONFIG_PINCTRL_SM8650_LPASS_LPI) += pinctrl-sm8650-lpass-lpi.o
+ obj-$(CONFIG_PINCTRL_SM8750) += pinctrl-sm8750.o
+ obj-$(CONFIG_PINCTRL_SC8280XP_LPASS_LPI) += pinctrl-sc8280xp-lpass-lpi.o
+diff --git a/drivers/pinctrl/qcom/pinctrl-sm8635.c b/drivers/pinctrl/qcom/pinctrl-sm8635.c
+new file mode 100644
+index 000000000..ee4bac071
+--- /dev/null
++++ b/drivers/pinctrl/qcom/pinctrl-sm8635.c
+@@ -0,0 +1,817 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Minimal Qualcomm SM8635 (cliffs) TLMM pinctrl driver for Xiaomi Pad 7 Pro (muyu).
++ * Register layout and PDC wakeirq map verified against vendor pinctrl-cliffs.ko.
++ */
++
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++
++#include "pinctrl-msm.h"
++
++#define REG_SIZE 0x1000
++
++#define PINGROUP(id, f1, f2)					\
++	{							\
++		.grp = PINCTRL_PINGROUP("gpio" #id,		\
++			gpio##id##_pins,			\
++			ARRAY_SIZE(gpio##id##_pins)),		\
++		.funcs = (unsigned int[]){			\
++			msm_mux_gpio,				\
++			msm_mux_##f1,				\
++			msm_mux_##f2,				\
++			msm_mux__,				\
++			msm_mux__,				\
++			msm_mux__,				\
++			msm_mux__,				\
++			msm_mux__,				\
++			msm_mux__,				\
++			msm_mux__,				\
++			msm_mux_egpio,				\
++		},						\
++		.nfuncs = 11,					\
++		.ctl_reg = REG_SIZE * id,			\
++		.io_reg = 0x4 + REG_SIZE * id,			\
++		.intr_cfg_reg = 0x8 + REG_SIZE * id,		\
++		.intr_status_reg = 0xc + REG_SIZE * id,		\
++		.mux_bit = 2,					\
++		.pull_bit = 0,					\
++		.drv_bit = 6,					\
++		.i2c_pull_bit = 13,				\
++		.egpio_enable = 12,				\
++		.egpio_present = 11,				\
++		.oe_bit = 9,					\
++		.in_bit = 0,					\
++		.out_bit = 1,					\
++		.intr_enable_bit = 0,				\
++		.intr_status_bit = 0,				\
++		.intr_wakeup_present_bit = 6,			\
++		.intr_wakeup_enable_bit = 7,			\
++		.intr_target_bit = 8,				\
++		.intr_target_kpss_val = 3,			\
++		.intr_raw_status_bit = 4,			\
++		.intr_polarity_bit = 1,				\
++		.intr_detection_bit = 2,			\
++		.intr_detection_width = 2,			\
++	}
++
++#define UFS_RESET(pg_name, ctl, io)				\
++	{							\
++		.grp = PINCTRL_PINGROUP(#pg_name,		\
++			pg_name##_pins,				\
++			ARRAY_SIZE(pg_name##_pins)),		\
++		.ctl_reg = ctl,					\
++		.io_reg = io,					\
++		.intr_cfg_reg = 0,				\
++		.intr_status_reg = 0,				\
++		.mux_bit = -1,					\
++		.pull_bit = 3,					\
++		.drv_bit = 0,					\
++		.oe_bit = -1,					\
++		.in_bit = -1,					\
++		.out_bit = 0,					\
++		.intr_enable_bit = -1,				\
++		.intr_status_bit = -1,				\
++		.intr_target_bit = -1,				\
++		.intr_raw_status_bit = -1,			\
++		.intr_polarity_bit = -1,			\
++		.intr_detection_bit = -1,			\
++		.intr_detection_width = -1,			\
++	}
++
++static const struct pinctrl_pin_desc sm8635_pins[] = {
++	PINCTRL_PIN(0, "GPIO_0"),
++	PINCTRL_PIN(1, "GPIO_1"),
++	PINCTRL_PIN(2, "GPIO_2"),
++	PINCTRL_PIN(3, "GPIO_3"),
++	PINCTRL_PIN(4, "GPIO_4"),
++	PINCTRL_PIN(5, "GPIO_5"),
++	PINCTRL_PIN(6, "GPIO_6"),
++	PINCTRL_PIN(7, "GPIO_7"),
++	PINCTRL_PIN(8, "GPIO_8"),
++	PINCTRL_PIN(9, "GPIO_9"),
++	PINCTRL_PIN(10, "GPIO_10"),
++	PINCTRL_PIN(11, "GPIO_11"),
++	PINCTRL_PIN(12, "GPIO_12"),
++	PINCTRL_PIN(13, "GPIO_13"),
++	PINCTRL_PIN(14, "GPIO_14"),
++	PINCTRL_PIN(15, "GPIO_15"),
++	PINCTRL_PIN(16, "GPIO_16"),
++	PINCTRL_PIN(17, "GPIO_17"),
++	PINCTRL_PIN(18, "GPIO_18"),
++	PINCTRL_PIN(19, "GPIO_19"),
++	PINCTRL_PIN(20, "GPIO_20"),
++	PINCTRL_PIN(21, "GPIO_21"),
++	PINCTRL_PIN(22, "GPIO_22"),
++	PINCTRL_PIN(23, "GPIO_23"),
++	PINCTRL_PIN(24, "GPIO_24"),
++	PINCTRL_PIN(25, "GPIO_25"),
++	PINCTRL_PIN(26, "GPIO_26"),
++	PINCTRL_PIN(27, "GPIO_27"),
++	PINCTRL_PIN(28, "GPIO_28"),
++	PINCTRL_PIN(29, "GPIO_29"),
++	PINCTRL_PIN(30, "GPIO_30"),
++	PINCTRL_PIN(31, "GPIO_31"),
++	PINCTRL_PIN(32, "GPIO_32"),
++	PINCTRL_PIN(33, "GPIO_33"),
++	PINCTRL_PIN(34, "GPIO_34"),
++	PINCTRL_PIN(35, "GPIO_35"),
++	PINCTRL_PIN(36, "GPIO_36"),
++	PINCTRL_PIN(37, "GPIO_37"),
++	PINCTRL_PIN(38, "GPIO_38"),
++	PINCTRL_PIN(39, "GPIO_39"),
++	PINCTRL_PIN(40, "GPIO_40"),
++	PINCTRL_PIN(41, "GPIO_41"),
++	PINCTRL_PIN(42, "GPIO_42"),
++	PINCTRL_PIN(43, "GPIO_43"),
++	PINCTRL_PIN(44, "GPIO_44"),
++	PINCTRL_PIN(45, "GPIO_45"),
++	PINCTRL_PIN(46, "GPIO_46"),
++	PINCTRL_PIN(47, "GPIO_47"),
++	PINCTRL_PIN(48, "GPIO_48"),
++	PINCTRL_PIN(49, "GPIO_49"),
++	PINCTRL_PIN(50, "GPIO_50"),
++	PINCTRL_PIN(51, "GPIO_51"),
++	PINCTRL_PIN(52, "GPIO_52"),
++	PINCTRL_PIN(53, "GPIO_53"),
++	PINCTRL_PIN(54, "GPIO_54"),
++	PINCTRL_PIN(55, "GPIO_55"),
++	PINCTRL_PIN(56, "GPIO_56"),
++	PINCTRL_PIN(57, "GPIO_57"),
++	PINCTRL_PIN(58, "GPIO_58"),
++	PINCTRL_PIN(59, "GPIO_59"),
++	PINCTRL_PIN(60, "GPIO_60"),
++	PINCTRL_PIN(61, "GPIO_61"),
++	PINCTRL_PIN(62, "GPIO_62"),
++	PINCTRL_PIN(63, "GPIO_63"),
++	PINCTRL_PIN(64, "GPIO_64"),
++	PINCTRL_PIN(65, "GPIO_65"),
++	PINCTRL_PIN(66, "GPIO_66"),
++	PINCTRL_PIN(67, "GPIO_67"),
++	PINCTRL_PIN(68, "GPIO_68"),
++	PINCTRL_PIN(69, "GPIO_69"),
++	PINCTRL_PIN(70, "GPIO_70"),
++	PINCTRL_PIN(71, "GPIO_71"),
++	PINCTRL_PIN(72, "GPIO_72"),
++	PINCTRL_PIN(73, "GPIO_73"),
++	PINCTRL_PIN(74, "GPIO_74"),
++	PINCTRL_PIN(75, "GPIO_75"),
++	PINCTRL_PIN(76, "GPIO_76"),
++	PINCTRL_PIN(77, "GPIO_77"),
++	PINCTRL_PIN(78, "GPIO_78"),
++	PINCTRL_PIN(79, "GPIO_79"),
++	PINCTRL_PIN(80, "GPIO_80"),
++	PINCTRL_PIN(81, "GPIO_81"),
++	PINCTRL_PIN(82, "GPIO_82"),
++	PINCTRL_PIN(83, "GPIO_83"),
++	PINCTRL_PIN(84, "GPIO_84"),
++	PINCTRL_PIN(85, "GPIO_85"),
++	PINCTRL_PIN(86, "GPIO_86"),
++	PINCTRL_PIN(87, "GPIO_87"),
++	PINCTRL_PIN(88, "GPIO_88"),
++	PINCTRL_PIN(89, "GPIO_89"),
++	PINCTRL_PIN(90, "GPIO_90"),
++	PINCTRL_PIN(91, "GPIO_91"),
++	PINCTRL_PIN(92, "GPIO_92"),
++	PINCTRL_PIN(93, "GPIO_93"),
++	PINCTRL_PIN(94, "GPIO_94"),
++	PINCTRL_PIN(95, "GPIO_95"),
++	PINCTRL_PIN(96, "GPIO_96"),
++	PINCTRL_PIN(97, "GPIO_97"),
++	PINCTRL_PIN(98, "GPIO_98"),
++	PINCTRL_PIN(99, "GPIO_99"),
++	PINCTRL_PIN(100, "GPIO_100"),
++	PINCTRL_PIN(101, "GPIO_101"),
++	PINCTRL_PIN(102, "GPIO_102"),
++	PINCTRL_PIN(103, "GPIO_103"),
++	PINCTRL_PIN(104, "GPIO_104"),
++	PINCTRL_PIN(105, "GPIO_105"),
++	PINCTRL_PIN(106, "GPIO_106"),
++	PINCTRL_PIN(107, "GPIO_107"),
++	PINCTRL_PIN(108, "GPIO_108"),
++	PINCTRL_PIN(109, "GPIO_109"),
++	PINCTRL_PIN(110, "GPIO_110"),
++	PINCTRL_PIN(111, "GPIO_111"),
++	PINCTRL_PIN(112, "GPIO_112"),
++	PINCTRL_PIN(113, "GPIO_113"),
++	PINCTRL_PIN(114, "GPIO_114"),
++	PINCTRL_PIN(115, "GPIO_115"),
++	PINCTRL_PIN(116, "GPIO_116"),
++	PINCTRL_PIN(117, "GPIO_117"),
++	PINCTRL_PIN(118, "GPIO_118"),
++	PINCTRL_PIN(119, "GPIO_119"),
++	PINCTRL_PIN(120, "GPIO_120"),
++	PINCTRL_PIN(121, "GPIO_121"),
++	PINCTRL_PIN(122, "GPIO_122"),
++	PINCTRL_PIN(123, "GPIO_123"),
++	PINCTRL_PIN(124, "GPIO_124"),
++	PINCTRL_PIN(125, "GPIO_125"),
++	PINCTRL_PIN(126, "GPIO_126"),
++	PINCTRL_PIN(127, "GPIO_127"),
++	PINCTRL_PIN(128, "GPIO_128"),
++	PINCTRL_PIN(129, "GPIO_129"),
++	PINCTRL_PIN(130, "GPIO_130"),
++	PINCTRL_PIN(131, "GPIO_131"),
++	PINCTRL_PIN(132, "GPIO_132"),
++	PINCTRL_PIN(133, "GPIO_133"),
++	PINCTRL_PIN(134, "GPIO_134"),
++	PINCTRL_PIN(135, "GPIO_135"),
++	PINCTRL_PIN(136, "GPIO_136"),
++	PINCTRL_PIN(137, "GPIO_137"),
++	PINCTRL_PIN(138, "GPIO_138"),
++	PINCTRL_PIN(139, "GPIO_139"),
++	PINCTRL_PIN(140, "GPIO_140"),
++	PINCTRL_PIN(141, "GPIO_141"),
++	PINCTRL_PIN(142, "GPIO_142"),
++	PINCTRL_PIN(143, "GPIO_143"),
++	PINCTRL_PIN(144, "GPIO_144"),
++	PINCTRL_PIN(145, "GPIO_145"),
++	PINCTRL_PIN(146, "GPIO_146"),
++	PINCTRL_PIN(147, "GPIO_147"),
++	PINCTRL_PIN(148, "GPIO_148"),
++	PINCTRL_PIN(149, "GPIO_149"),
++	PINCTRL_PIN(150, "GPIO_150"),
++	PINCTRL_PIN(151, "GPIO_151"),
++	PINCTRL_PIN(152, "GPIO_152"),
++	PINCTRL_PIN(153, "GPIO_153"),
++	PINCTRL_PIN(154, "GPIO_154"),
++	PINCTRL_PIN(155, "GPIO_155"),
++	PINCTRL_PIN(156, "GPIO_156"),
++	PINCTRL_PIN(157, "GPIO_157"),
++	PINCTRL_PIN(158, "GPIO_158"),
++	PINCTRL_PIN(159, "GPIO_159"),
++	PINCTRL_PIN(160, "GPIO_160"),
++	PINCTRL_PIN(161, "GPIO_161"),
++	PINCTRL_PIN(162, "GPIO_162"),
++	PINCTRL_PIN(163, "GPIO_163"),
++	PINCTRL_PIN(164, "GPIO_164"),
++	PINCTRL_PIN(165, "GPIO_165"),
++	PINCTRL_PIN(166, "GPIO_166"),
++	PINCTRL_PIN(167, "GPIO_167"),
++	PINCTRL_PIN(168, "GPIO_168"),
++	PINCTRL_PIN(169, "GPIO_169"),
++	PINCTRL_PIN(170, "GPIO_170"),
++	PINCTRL_PIN(171, "GPIO_171"),
++	PINCTRL_PIN(172, "GPIO_172"),
++	PINCTRL_PIN(173, "GPIO_173"),
++	PINCTRL_PIN(174, "GPIO_174"),
++	PINCTRL_PIN(175, "GPIO_175"),
++	PINCTRL_PIN(176, "GPIO_176"),
++	PINCTRL_PIN(177, "GPIO_177"),
++	PINCTRL_PIN(178, "UFS_RESET"),
++};
++
++#define DECLARE_MSM_GPIO_PINS(pin) \
++	static const unsigned int gpio##pin##_pins[] = { pin }
++DECLARE_MSM_GPIO_PINS(0);
++DECLARE_MSM_GPIO_PINS(1);
++DECLARE_MSM_GPIO_PINS(2);
++DECLARE_MSM_GPIO_PINS(3);
++DECLARE_MSM_GPIO_PINS(4);
++DECLARE_MSM_GPIO_PINS(5);
++DECLARE_MSM_GPIO_PINS(6);
++DECLARE_MSM_GPIO_PINS(7);
++DECLARE_MSM_GPIO_PINS(8);
++DECLARE_MSM_GPIO_PINS(9);
++DECLARE_MSM_GPIO_PINS(10);
++DECLARE_MSM_GPIO_PINS(11);
++DECLARE_MSM_GPIO_PINS(12);
++DECLARE_MSM_GPIO_PINS(13);
++DECLARE_MSM_GPIO_PINS(14);
++DECLARE_MSM_GPIO_PINS(15);
++DECLARE_MSM_GPIO_PINS(16);
++DECLARE_MSM_GPIO_PINS(17);
++DECLARE_MSM_GPIO_PINS(18);
++DECLARE_MSM_GPIO_PINS(19);
++DECLARE_MSM_GPIO_PINS(20);
++DECLARE_MSM_GPIO_PINS(21);
++DECLARE_MSM_GPIO_PINS(22);
++DECLARE_MSM_GPIO_PINS(23);
++DECLARE_MSM_GPIO_PINS(24);
++DECLARE_MSM_GPIO_PINS(25);
++DECLARE_MSM_GPIO_PINS(26);
++DECLARE_MSM_GPIO_PINS(27);
++DECLARE_MSM_GPIO_PINS(28);
++DECLARE_MSM_GPIO_PINS(29);
++DECLARE_MSM_GPIO_PINS(30);
++DECLARE_MSM_GPIO_PINS(31);
++DECLARE_MSM_GPIO_PINS(32);
++DECLARE_MSM_GPIO_PINS(33);
++DECLARE_MSM_GPIO_PINS(34);
++DECLARE_MSM_GPIO_PINS(35);
++DECLARE_MSM_GPIO_PINS(36);
++DECLARE_MSM_GPIO_PINS(37);
++DECLARE_MSM_GPIO_PINS(38);
++DECLARE_MSM_GPIO_PINS(39);
++DECLARE_MSM_GPIO_PINS(40);
++DECLARE_MSM_GPIO_PINS(41);
++DECLARE_MSM_GPIO_PINS(42);
++DECLARE_MSM_GPIO_PINS(43);
++DECLARE_MSM_GPIO_PINS(44);
++DECLARE_MSM_GPIO_PINS(45);
++DECLARE_MSM_GPIO_PINS(46);
++DECLARE_MSM_GPIO_PINS(47);
++DECLARE_MSM_GPIO_PINS(48);
++DECLARE_MSM_GPIO_PINS(49);
++DECLARE_MSM_GPIO_PINS(50);
++DECLARE_MSM_GPIO_PINS(51);
++DECLARE_MSM_GPIO_PINS(52);
++DECLARE_MSM_GPIO_PINS(53);
++DECLARE_MSM_GPIO_PINS(54);
++DECLARE_MSM_GPIO_PINS(55);
++DECLARE_MSM_GPIO_PINS(56);
++DECLARE_MSM_GPIO_PINS(57);
++DECLARE_MSM_GPIO_PINS(58);
++DECLARE_MSM_GPIO_PINS(59);
++DECLARE_MSM_GPIO_PINS(60);
++DECLARE_MSM_GPIO_PINS(61);
++DECLARE_MSM_GPIO_PINS(62);
++DECLARE_MSM_GPIO_PINS(63);
++DECLARE_MSM_GPIO_PINS(64);
++DECLARE_MSM_GPIO_PINS(65);
++DECLARE_MSM_GPIO_PINS(66);
++DECLARE_MSM_GPIO_PINS(67);
++DECLARE_MSM_GPIO_PINS(68);
++DECLARE_MSM_GPIO_PINS(69);
++DECLARE_MSM_GPIO_PINS(70);
++DECLARE_MSM_GPIO_PINS(71);
++DECLARE_MSM_GPIO_PINS(72);
++DECLARE_MSM_GPIO_PINS(73);
++DECLARE_MSM_GPIO_PINS(74);
++DECLARE_MSM_GPIO_PINS(75);
++DECLARE_MSM_GPIO_PINS(76);
++DECLARE_MSM_GPIO_PINS(77);
++DECLARE_MSM_GPIO_PINS(78);
++DECLARE_MSM_GPIO_PINS(79);
++DECLARE_MSM_GPIO_PINS(80);
++DECLARE_MSM_GPIO_PINS(81);
++DECLARE_MSM_GPIO_PINS(82);
++DECLARE_MSM_GPIO_PINS(83);
++DECLARE_MSM_GPIO_PINS(84);
++DECLARE_MSM_GPIO_PINS(85);
++DECLARE_MSM_GPIO_PINS(86);
++DECLARE_MSM_GPIO_PINS(87);
++DECLARE_MSM_GPIO_PINS(88);
++DECLARE_MSM_GPIO_PINS(89);
++DECLARE_MSM_GPIO_PINS(90);
++DECLARE_MSM_GPIO_PINS(91);
++DECLARE_MSM_GPIO_PINS(92);
++DECLARE_MSM_GPIO_PINS(93);
++DECLARE_MSM_GPIO_PINS(94);
++DECLARE_MSM_GPIO_PINS(95);
++DECLARE_MSM_GPIO_PINS(96);
++DECLARE_MSM_GPIO_PINS(97);
++DECLARE_MSM_GPIO_PINS(98);
++DECLARE_MSM_GPIO_PINS(99);
++DECLARE_MSM_GPIO_PINS(100);
++DECLARE_MSM_GPIO_PINS(101);
++DECLARE_MSM_GPIO_PINS(102);
++DECLARE_MSM_GPIO_PINS(103);
++DECLARE_MSM_GPIO_PINS(104);
++DECLARE_MSM_GPIO_PINS(105);
++DECLARE_MSM_GPIO_PINS(106);
++DECLARE_MSM_GPIO_PINS(107);
++DECLARE_MSM_GPIO_PINS(108);
++DECLARE_MSM_GPIO_PINS(109);
++DECLARE_MSM_GPIO_PINS(110);
++DECLARE_MSM_GPIO_PINS(111);
++DECLARE_MSM_GPIO_PINS(112);
++DECLARE_MSM_GPIO_PINS(113);
++DECLARE_MSM_GPIO_PINS(114);
++DECLARE_MSM_GPIO_PINS(115);
++DECLARE_MSM_GPIO_PINS(116);
++DECLARE_MSM_GPIO_PINS(117);
++DECLARE_MSM_GPIO_PINS(118);
++DECLARE_MSM_GPIO_PINS(119);
++DECLARE_MSM_GPIO_PINS(120);
++DECLARE_MSM_GPIO_PINS(121);
++DECLARE_MSM_GPIO_PINS(122);
++DECLARE_MSM_GPIO_PINS(123);
++DECLARE_MSM_GPIO_PINS(124);
++DECLARE_MSM_GPIO_PINS(125);
++DECLARE_MSM_GPIO_PINS(126);
++DECLARE_MSM_GPIO_PINS(127);
++DECLARE_MSM_GPIO_PINS(128);
++DECLARE_MSM_GPIO_PINS(129);
++DECLARE_MSM_GPIO_PINS(130);
++DECLARE_MSM_GPIO_PINS(131);
++DECLARE_MSM_GPIO_PINS(132);
++DECLARE_MSM_GPIO_PINS(133);
++DECLARE_MSM_GPIO_PINS(134);
++DECLARE_MSM_GPIO_PINS(135);
++DECLARE_MSM_GPIO_PINS(136);
++DECLARE_MSM_GPIO_PINS(137);
++DECLARE_MSM_GPIO_PINS(138);
++DECLARE_MSM_GPIO_PINS(139);
++DECLARE_MSM_GPIO_PINS(140);
++DECLARE_MSM_GPIO_PINS(141);
++DECLARE_MSM_GPIO_PINS(142);
++DECLARE_MSM_GPIO_PINS(143);
++DECLARE_MSM_GPIO_PINS(144);
++DECLARE_MSM_GPIO_PINS(145);
++DECLARE_MSM_GPIO_PINS(146);
++DECLARE_MSM_GPIO_PINS(147);
++DECLARE_MSM_GPIO_PINS(148);
++DECLARE_MSM_GPIO_PINS(149);
++DECLARE_MSM_GPIO_PINS(150);
++DECLARE_MSM_GPIO_PINS(151);
++DECLARE_MSM_GPIO_PINS(152);
++DECLARE_MSM_GPIO_PINS(153);
++DECLARE_MSM_GPIO_PINS(154);
++DECLARE_MSM_GPIO_PINS(155);
++DECLARE_MSM_GPIO_PINS(156);
++DECLARE_MSM_GPIO_PINS(157);
++DECLARE_MSM_GPIO_PINS(158);
++DECLARE_MSM_GPIO_PINS(159);
++DECLARE_MSM_GPIO_PINS(160);
++DECLARE_MSM_GPIO_PINS(161);
++DECLARE_MSM_GPIO_PINS(162);
++DECLARE_MSM_GPIO_PINS(163);
++DECLARE_MSM_GPIO_PINS(164);
++DECLARE_MSM_GPIO_PINS(165);
++DECLARE_MSM_GPIO_PINS(166);
++DECLARE_MSM_GPIO_PINS(167);
++DECLARE_MSM_GPIO_PINS(168);
++DECLARE_MSM_GPIO_PINS(169);
++DECLARE_MSM_GPIO_PINS(170);
++DECLARE_MSM_GPIO_PINS(171);
++DECLARE_MSM_GPIO_PINS(172);
++DECLARE_MSM_GPIO_PINS(173);
++DECLARE_MSM_GPIO_PINS(174);
++DECLARE_MSM_GPIO_PINS(175);
++DECLARE_MSM_GPIO_PINS(176);
++DECLARE_MSM_GPIO_PINS(177);
++
++static const unsigned int ufs_reset_pins[] = { 178 };
++
++enum sm8635_functions {
++	msm_mux_gpio,
++	msm_mux_egpio,
++	msm_mux_qup0_se0,
++	msm_mux_qup0_se3,
++	msm_mux_qup0_se4,
++	msm_mux_qup1_se2,
++	msm_mux_qup1_se3,
++	msm_mux_qup1_se4,
++	msm_mux_pcie0_clk_req_n,
++	msm_mux__,
++};
++
++static const char *const gpio_groups[] = {
++	"gpio0",   "gpio1",   "gpio2",   "gpio3",
++	"gpio4",   "gpio5",   "gpio6",   "gpio7",
++	"gpio8",   "gpio9",   "gpio10",  "gpio11",
++	"gpio12",  "gpio13",  "gpio14",  "gpio15",
++	"gpio16",  "gpio17",  "gpio18",  "gpio19",
++	"gpio20",  "gpio21",  "gpio22",  "gpio23",
++	"gpio24",  "gpio25",  "gpio26",  "gpio27",
++	"gpio28",  "gpio29",  "gpio30",  "gpio31",
++	"gpio32",  "gpio33",  "gpio34",  "gpio35",
++	"gpio36",  "gpio37",  "gpio38",  "gpio39",
++	"gpio40",  "gpio41",  "gpio42",  "gpio43",
++	"gpio44",  "gpio45",  "gpio46",  "gpio47",
++	"gpio48",  "gpio49",  "gpio50",  "gpio51",
++	"gpio52",  "gpio53",  "gpio54",  "gpio55",
++	"gpio56",  "gpio57",  "gpio58",  "gpio59",
++	"gpio60",  "gpio61",  "gpio62",  "gpio63",
++	"gpio64",  "gpio65",  "gpio66",  "gpio67",
++	"gpio68",  "gpio69",  "gpio70",  "gpio71",
++	"gpio72",  "gpio73",  "gpio74",  "gpio75",
++	"gpio76",  "gpio77",  "gpio78",  "gpio79",
++	"gpio80",  "gpio81",  "gpio82",  "gpio83",
++	"gpio84",  "gpio85",  "gpio86",  "gpio87",
++	"gpio88",  "gpio89",  "gpio90",  "gpio91",
++	"gpio92",  "gpio93",  "gpio94",  "gpio95",
++	"gpio96",  "gpio97",  "gpio98",  "gpio99",
++	"gpio100", "gpio101", "gpio102", "gpio103",
++	"gpio104", "gpio105", "gpio106", "gpio107",
++	"gpio108", "gpio109", "gpio110", "gpio111",
++	"gpio112", "gpio113", "gpio114", "gpio115",
++	"gpio116", "gpio117", "gpio118", "gpio119",
++	"gpio120", "gpio121", "gpio122", "gpio123",
++	"gpio124", "gpio125", "gpio126", "gpio127",
++	"gpio128", "gpio129", "gpio130", "gpio131",
++	"gpio132", "gpio133", "gpio134", "gpio135",
++	"gpio136", "gpio137", "gpio138", "gpio139",
++	"gpio140", "gpio141", "gpio142", "gpio143",
++	"gpio144", "gpio145", "gpio146", "gpio147",
++	"gpio148", "gpio149", "gpio150", "gpio151",
++	"gpio152", "gpio153", "gpio154", "gpio155",
++	"gpio156", "gpio157", "gpio158", "gpio159",
++	"gpio160", "gpio161", "gpio162", "gpio163",
++	"gpio164", "gpio165", "gpio166", "gpio167",
++	"gpio168", "gpio169", "gpio170", "gpio171",
++	"gpio172", "gpio173", "gpio174", "gpio175",
++	"gpio176", "gpio177",
++};
++
++static const char *const qup0_se0_groups[] = {
++	"gpio52", "gpio53",
++};
++
++static const char *const qup0_se3_groups[] = {
++	"gpio12", "gpio13",
++};
++
++static const char *const qup0_se4_groups[] = {
++	"gpio16", "gpio17", "gpio18", "gpio19",
++};
++
++static const char *const qup1_se3_groups[] = {
++	"gpio44", "gpio45",
++};
++
++static const char *const qup1_se4_groups[] = {
++	"gpio176", "gpio177",
++};
++
++static const char *const qup1_se2_groups[] = {
++	"gpio40", "gpio41", "gpio42", "gpio43",
++};
++
++static const char *const pcie0_clk_req_n_groups[] = {
++	"gpio118",
++};
++
++static const char *const egpio_groups[] = {
++	"gpio0",   "gpio1",   "gpio2",   "gpio3",
++	"gpio139", "gpio140", "gpio141", "gpio142",
++	"gpio143", "gpio144", "gpio145", "gpio146",
++	"gpio147", "gpio148", "gpio149", "gpio150",
++	"gpio151", "gpio152", "gpio153", "gpio154",
++	"gpio155", "gpio156", "gpio157", "gpio158",
++	"gpio159", "gpio160", "gpio161", "gpio162",
++	"gpio163", "gpio164", "gpio165", "gpio166",
++	"gpio167", "gpio168", "gpio169", "gpio170",
++	"gpio171", "gpio172", "gpio173", "gpio174",
++	"gpio175",
++};
++
++static const struct pinfunction sm8635_functions[] = {
++	MSM_GPIO_PIN_FUNCTION(gpio),
++	MSM_PIN_FUNCTION(egpio),
++	MSM_PIN_FUNCTION(qup0_se0),
++	MSM_PIN_FUNCTION(qup0_se3),
++	MSM_PIN_FUNCTION(qup0_se4),
++	MSM_PIN_FUNCTION(qup1_se2),
++	MSM_PIN_FUNCTION(qup1_se3),
++	MSM_PIN_FUNCTION(qup1_se4),
++	MSM_PIN_FUNCTION(pcie0_clk_req_n),
++};
++
++static const struct msm_pingroup sm8635_groups[] = {
++	[0] = PINGROUP(0, _, _),
++	[1] = PINGROUP(1, _, _),
++	[2] = PINGROUP(2, _, _),
++	[3] = PINGROUP(3, _, _),
++	[4] = PINGROUP(4, _, _),
++	[5] = PINGROUP(5, _, _),
++	[6] = PINGROUP(6, _, _),
++	[7] = PINGROUP(7, _, _),
++	[8] = PINGROUP(8, _, _),
++	[9] = PINGROUP(9, _, _),
++	[10] = PINGROUP(10, _, _),
++	[11] = PINGROUP(11, _, _),
++	[12] = PINGROUP(12, _, qup0_se3),
++	[13] = PINGROUP(13, _, qup0_se3),
++	[14] = PINGROUP(14, _, _),
++	[15] = PINGROUP(15, _, _),
++	[16] = PINGROUP(16, qup0_se4, _),
++	[17] = PINGROUP(17, qup0_se4, _),
++	[18] = PINGROUP(18, qup0_se4, _),
++	[19] = PINGROUP(19, qup0_se4, _),
++	[20] = PINGROUP(20, _, _),
++	[21] = PINGROUP(21, _, _),
++	[22] = PINGROUP(22, _, _),
++	[23] = PINGROUP(23, _, _),
++	[24] = PINGROUP(24, _, _),
++	[25] = PINGROUP(25, _, _),
++	[26] = PINGROUP(26, _, _),
++	[27] = PINGROUP(27, _, _),
++	[28] = PINGROUP(28, _, _),
++	[29] = PINGROUP(29, _, _),
++	[30] = PINGROUP(30, _, _),
++	[31] = PINGROUP(31, _, _),
++	[32] = PINGROUP(32, _, _),
++	[33] = PINGROUP(33, _, _),
++	[34] = PINGROUP(34, _, _),
++	[35] = PINGROUP(35, _, _),
++	[36] = PINGROUP(36, _, _),
++	[37] = PINGROUP(37, _, _),
++	[38] = PINGROUP(38, _, _),
++	[39] = PINGROUP(39, _, _),
++	[40] = PINGROUP(40, qup1_se2, _),
++	[41] = PINGROUP(41, qup1_se2, _),
++	[42] = PINGROUP(42, qup1_se2, _),
++	[43] = PINGROUP(43, qup1_se2, _),
++	[44] = PINGROUP(44, qup1_se3, _),
++	[45] = PINGROUP(45, qup1_se3, _),
++	[46] = PINGROUP(46, _, _),
++	[47] = PINGROUP(47, _, _),
++	[48] = PINGROUP(48, _, _),
++	[49] = PINGROUP(49, _, _),
++	[50] = PINGROUP(50, _, _),
++	[51] = PINGROUP(51, _, _),
++	[52] = PINGROUP(52, qup0_se0, _),
++	[53] = PINGROUP(53, qup0_se0, _),
++	[54] = PINGROUP(54, _, _),
++	[55] = PINGROUP(55, _, _),
++	[56] = PINGROUP(56, _, _),
++	[57] = PINGROUP(57, _, _),
++	[58] = PINGROUP(58, _, _),
++	[59] = PINGROUP(59, _, _),
++	[60] = PINGROUP(60, _, _),
++	[61] = PINGROUP(61, _, _),
++	[62] = PINGROUP(62, _, _),
++	[63] = PINGROUP(63, _, _),
++	[64] = PINGROUP(64, _, _),
++	[65] = PINGROUP(65, _, _),
++	[66] = PINGROUP(66, _, _),
++	[67] = PINGROUP(67, _, _),
++	[68] = PINGROUP(68, _, _),
++	[69] = PINGROUP(69, _, _),
++	[70] = PINGROUP(70, _, _),
++	[71] = PINGROUP(71, _, _),
++	[72] = PINGROUP(72, _, _),
++	[73] = PINGROUP(73, _, _),
++	[74] = PINGROUP(74, _, _),
++	[75] = PINGROUP(75, _, _),
++	[76] = PINGROUP(76, _, _),
++	[77] = PINGROUP(77, _, _),
++	[78] = PINGROUP(78, _, _),
++	[79] = PINGROUP(79, _, _),
++	[80] = PINGROUP(80, _, _),
++	[81] = PINGROUP(81, _, _),
++	[82] = PINGROUP(82, _, _),
++	[83] = PINGROUP(83, _, _),
++	[84] = PINGROUP(84, _, _),
++	[85] = PINGROUP(85, _, _),
++	[86] = PINGROUP(86, _, _),
++	[87] = PINGROUP(87, _, _),
++	[88] = PINGROUP(88, _, _),
++	[89] = PINGROUP(89, _, _),
++	[90] = PINGROUP(90, _, _),
++	[91] = PINGROUP(91, _, _),
++	[92] = PINGROUP(92, _, _),
++	[93] = PINGROUP(93, _, _),
++	[94] = PINGROUP(94, _, _),
++	[95] = PINGROUP(95, _, _),
++	[96] = PINGROUP(96, _, _),
++	[97] = PINGROUP(97, _, _),
++	[98] = PINGROUP(98, _, _),
++	[99] = PINGROUP(99, _, _),
++	[100] = PINGROUP(100, _, _),
++	[101] = PINGROUP(101, _, _),
++	[102] = PINGROUP(102, _, _),
++	[103] = PINGROUP(103, _, _),
++	[104] = PINGROUP(104, _, _),
++	[105] = PINGROUP(105, _, _),
++	[106] = PINGROUP(106, _, _),
++	[107] = PINGROUP(107, _, _),
++	[108] = PINGROUP(108, _, _),
++	[109] = PINGROUP(109, _, _),
++	[110] = PINGROUP(110, _, _),
++	[111] = PINGROUP(111, _, _),
++	[112] = PINGROUP(112, _, _),
++	[113] = PINGROUP(113, _, _),
++	[114] = PINGROUP(114, _, _),
++	[115] = PINGROUP(115, _, _),
++	[116] = PINGROUP(116, _, _),
++	[117] = PINGROUP(117, _, _),
++	[118] = PINGROUP(118, pcie0_clk_req_n, _),
++	[119] = PINGROUP(119, _, _),
++	[120] = PINGROUP(120, _, _),
++	[121] = PINGROUP(121, _, _),
++	[122] = PINGROUP(122, _, _),
++	[123] = PINGROUP(123, _, _),
++	[124] = PINGROUP(124, _, _),
++	[125] = PINGROUP(125, _, _),
++	[126] = PINGROUP(126, _, _),
++	[127] = PINGROUP(127, _, _),
++	[128] = PINGROUP(128, _, _),
++	[129] = PINGROUP(129, _, _),
++	[130] = PINGROUP(130, _, _),
++	[131] = PINGROUP(131, _, _),
++	[132] = PINGROUP(132, _, _),
++	[133] = PINGROUP(133, _, _),
++	[134] = PINGROUP(134, _, _),
++	[135] = PINGROUP(135, _, _),
++	[136] = PINGROUP(136, _, _),
++	[137] = PINGROUP(137, _, _),
++	[138] = PINGROUP(138, _, _),
++	[139] = PINGROUP(139, _, _),
++	[140] = PINGROUP(140, _, _),
++	[141] = PINGROUP(141, _, _),
++	[142] = PINGROUP(142, _, _),
++	[143] = PINGROUP(143, _, _),
++	[144] = PINGROUP(144, _, _),
++	[145] = PINGROUP(145, _, _),
++	[146] = PINGROUP(146, _, _),
++	[147] = PINGROUP(147, _, _),
++	[148] = PINGROUP(148, _, _),
++	[149] = PINGROUP(149, _, _),
++	[150] = PINGROUP(150, _, _),
++	[151] = PINGROUP(151, _, _),
++	[152] = PINGROUP(152, _, _),
++	[153] = PINGROUP(153, _, _),
++	[154] = PINGROUP(154, _, _),
++	[155] = PINGROUP(155, _, _),
++	[156] = PINGROUP(156, _, _),
++	[157] = PINGROUP(157, _, _),
++	[158] = PINGROUP(158, _, _),
++	[159] = PINGROUP(159, _, _),
++	[160] = PINGROUP(160, _, _),
++	[161] = PINGROUP(161, _, _),
++	[162] = PINGROUP(162, _, _),
++	[163] = PINGROUP(163, _, _),
++	[164] = PINGROUP(164, _, _),
++	[165] = PINGROUP(165, _, _),
++	[166] = PINGROUP(166, _, _),
++	[167] = PINGROUP(167, _, _),
++	[168] = PINGROUP(168, _, _),
++	[169] = PINGROUP(169, _, _),
++	[170] = PINGROUP(170, _, _),
++	[171] = PINGROUP(171, _, _),
++	[172] = PINGROUP(172, _, _),
++	[173] = PINGROUP(173, _, _),
++	[174] = PINGROUP(174, _, _),
++	[175] = PINGROUP(175, _, _),
++	[176] = PINGROUP(176, qup1_se4, _),
++	[177] = PINGROUP(177, qup1_se4, _),
++	[178] = UFS_RESET(ufs_reset, 0xbc004, 0xbd000),
++};
++
++static const struct msm_gpio_wakeirq_map sm8635_pdc_map[] = {
++	{ 0, 56 },   { 3, 100 },  { 4, 57 },   { 7, 58 },
++	{ 11, 64 },  { 12, 61 },  { 14, 59 },  { 15, 62 },
++	{ 16, 60 },  { 19, 63 },  { 20, 75 },  { 21, 88 },
++	{ 22, 66 },  { 23, 67 },  { 24, 68 },  { 27, 69 },
++	{ 29, 70 },  { 31, 55 },  { 32, 76 },  { 34, 53 },
++	{ 35, 77 },  { 36, 78 },  { 39, 116 }, { 40, 79 },
++	{ 43, 80 },  { 44, 81 },  { 47, 86 },  { 49, 115 },
++	{ 51, 117 }, { 52, 89 },  { 54, 90 },  { 55, 84 },
++	{ 56, 72 },  { 59, 96 },  { 60, 97 },  { 61, 98 },
++	{ 69, 92 },  { 76, 104 }, { 77, 106 }, { 78, 107 },
++	{ 80, 54 },  { 81, 91 },  { 83, 108 }, { 87, 109 },
++	{ 91, 110 }, { 92, 111 }, { 95, 112 }, { 99, 125 },
++	{ 100, 51 }, { 101, 114 }, { 111, 144 }, { 112, 73 },
++	{ 113, 124 }, { 115, 52 }, { 116, 145 }, { 117, 65 },
++	{ 118, 146 }, { 121, 118 }, { 122, 119 }, { 128, 120 },
++	{ 129, 121 }, { 130, 122 }, { 131, 123 }, { 133, 105 },
++	{ 135, 93 }, { 136, 74 }, { 137, 71 }, { 138, 82 },
++	{ 140, 126 }, { 143, 127 }, { 145, 128 }, { 146, 129 },
++	{ 148, 102 }, { 150, 130 }, { 151, 95 }, { 152, 113 },
++	{ 155, 103 }, { 157, 131 }, { 158, 132 }, { 160, 133 },
++	{ 161, 134 }, { 162, 135 }, { 163, 136 }, { 165, 137 },
++	{ 166, 138 }, { 167, 139 }, { 168, 85 }, { 169, 94 },
++	{ 170, 140 }, { 171, 141 }, { 172, 143 }, { 173, 142 },
++	{ 174, 99 }, { 175, 101 }, { 176, 87 }, { 177, 83 },
++};
++
++static const struct msm_pinctrl_soc_data sm8635_tlmm = {
++	.pins = sm8635_pins,
++	.npins = ARRAY_SIZE(sm8635_pins),
++	.functions = sm8635_functions,
++	.nfunctions = ARRAY_SIZE(sm8635_functions),
++	.groups = sm8635_groups,
++	.ngroups = ARRAY_SIZE(sm8635_groups),
++	.ngpios = 179,
++	.wakeirq_map = sm8635_pdc_map,
++	.nwakeirq_map = ARRAY_SIZE(sm8635_pdc_map),
++	.egpio_func = 10,
++};
++
++static int sm8635_tlmm_probe(struct platform_device *pdev)
++{
++	return msm_pinctrl_probe(pdev, &sm8635_tlmm);
++}
++
++static const struct of_device_id sm8635_tlmm_of_match[] = {
++	{ .compatible = "qcom,sm8635-tlmm", },
++	{},
++};
++MODULE_DEVICE_TABLE(of, sm8635_tlmm_of_match);
++
++static struct platform_driver sm8635_tlmm_driver = {
++	.driver = {
++		.name = "sm8635-tlmm",
++		.of_match_table = sm8635_tlmm_of_match,
++	},
++	.probe = sm8635_tlmm_probe,
++};
++
++static int __init sm8635_tlmm_init(void)
++{
++	return platform_driver_register(&sm8635_tlmm_driver);
++}
++arch_initcall(sm8635_tlmm_init);
++
++static void __exit sm8635_tlmm_exit(void)
++{
++	platform_driver_unregister(&sm8635_tlmm_driver);
++}
++module_exit(sm8635_tlmm_exit);
++
++MODULE_DESCRIPTION("QTI SM8635 TLMM driver");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/soc/qcom/llcc-qcom.c b/drivers/soc/qcom/llcc-qcom.c
+index 623765421..ed1d38242 100644
+--- a/drivers/soc/qcom/llcc-qcom.c
++++ b/drivers/soc/qcom/llcc-qcom.c
+@@ -3552,6 +3552,151 @@ static const struct llcc_slice_config sm8550_data[] =  {
+ 	},
+ };
+ 
++static const struct llcc_slice_config sm8635_data[] = {
++	{
++		.usecase_id = LLCC_CPUSS,
++		.slice_id = 1,
++		.max_cap = 3200,
++		.priority = 0,
++		.bonus_ways = 0x3fff,
++		.cache_mode = 0,
++		.activate_on_init = true,
++	}, {
++		.usecase_id = LLCC_VIDSC0,
++		.slice_id = 2,
++		.max_cap = 128,
++		.priority = 3,
++		.fixed_size = true,
++		.bonus_ways = 0x3fff,
++		.cache_mode = 0,
++	}, {
++		.usecase_id = LLCC_AUDIO,
++		.slice_id = 6,
++		.max_cap = 256,
++		.priority = 1,
++		.fixed_size = true,
++		.bonus_ways = 0x3fff,
++		.cache_mode = 0,
++	}, {
++		.usecase_id = LLCC_MDMHPGRW,
++		.slice_id = 25,
++		.max_cap = 1024,
++		.priority = 3,
++		.bonus_ways = 0x3fff,
++		.cache_mode = 0,
++	}, {
++		.usecase_id = LLCC_GPUHTW,
++		.slice_id = 11,
++		.max_cap = 256,
++		.priority = 1,
++		.fixed_size = true,
++		.bonus_ways = 0x3fff,
++		.cache_mode = 0,
++	}, {
++		.usecase_id = LLCC_GPU,
++		.slice_id = 9,
++		.max_cap = 3200,
++		.priority = 1,
++		.bonus_ways = 0x3fff,
++		.cache_mode = 0,
++		.write_scid_en = true,
++		.write_scid_cacheable_en = true,
++	}, {
++		.usecase_id = LLCC_MMUHWT,
++		.slice_id = 18,
++		.max_cap = 512,
++		.priority = 1,
++		.fixed_size = true,
++		.bonus_ways = 0x3fff,
++		.cache_mode = 0,
++		.activate_on_init = true,
++	}, {
++		.usecase_id = LLCC_DISP,
++		.slice_id = 16,
++		.max_cap = 3584,
++		.priority = 1,
++		.fixed_size = true,
++		.bonus_ways = 0x3fff,
++		.cache_mode = 2,
++	}, {
++		.usecase_id = LLCC_MDMHPFX,
++		.slice_id = 24,
++		.max_cap = 1024,
++		.priority = 3,
++		.fixed_size = true,
++		.bonus_ways = 0x3fff,
++		.cache_mode = 0,
++	}, {
++		.usecase_id = LLCC_MDMPNG,
++		.slice_id = 27,
++		.max_cap = 256,
++		.priority = 3,
++		.fixed_size = true,
++		.bonus_ways = 0x3fff,
++		.cache_mode = 0,
++	}, {
++		.usecase_id = LLCC_MODPE,
++		.slice_id = 29,
++		.max_cap = 64,
++		.priority = 1,
++		.fixed_size = true,
++		.bonus_ways = 0x3c00,
++		.cache_mode = 0,
++		.alloc_oneway_en = true,
++	}, {
++		.usecase_id = LLCC_WRCACHE,
++		.slice_id = 31,
++		.max_cap = 512,
++		.priority = 1,
++		.fixed_size = true,
++		.bonus_ways = 0x3fff,
++		.cache_mode = 0,
++		.activate_on_init = true,
++	}, {
++		.usecase_id = LLCC_CAMEXP0,
++		.slice_id = 4,
++		.max_cap = 256,
++		.priority = 3,
++		.fixed_size = true,
++		.bonus_ways = 0xf,
++		.cache_mode = 0,
++	}, {
++		.usecase_id = LLCC_CAMEXP1,
++		.slice_id = 7,
++		.max_cap = 1536,
++		.priority = 2,
++		.fixed_size = true,
++		.bonus_ways = 0x3ff0,
++		.cache_mode = 2,
++	}, {
++		.usecase_id = LLCC_LCPDARE,
++		.slice_id = 30,
++		.max_cap = 128,
++		.priority = 3,
++		.fixed_size = true,
++		.bonus_ways = 0x3fff,
++		.cache_mode = 0,
++		.activate_on_init = true,
++		.alloc_oneway_en = true,
++	}, {
++		.usecase_id = LLCC_AENPU,
++		.slice_id = 3,
++		.max_cap = 2048,
++		.priority = 1,
++		.fixed_size = true,
++		.bonus_ways = 0x3fff,
++		.cache_mode = 2,
++	}, {
++		.usecase_id = LLCC_ISLAND1,
++		.slice_id = 12,
++		.max_cap = 3328,
++		.priority = 7,
++		.fixed_size = true,
++		.res_ways = 0x1fff,
++		.cache_mode = 0,
++	},
++};
++
+ static const struct llcc_slice_config sm8650_data[] = {
+ 	{
+ 		.usecase_id = LLCC_CPUSS,
+@@ -4835,6 +4980,16 @@ static const struct qcom_llcc_config sm8550_cfg[] = {
+ 	},
+ };
+ 
++static const struct qcom_llcc_config sm8635_cfg[] = {
++	{
++		.sct_data	= sm8635_data,
++		.size		= ARRAY_SIZE(sm8635_data),
++		.reg_offset	= llcc_v2_1_reg_offset,
++		.edac_reg_offset = &llcc_v2_1_edac_reg_offset,
++		.no_edac	= true,
++	},
++};
++
+ static const struct qcom_llcc_config sm8650_cfg[] = {
+ 	{
+ 		.sct_data       = sm8650_data,
+@@ -4994,6 +5149,11 @@ static const struct qcom_sct_config sm8550_cfgs = {
+ 	.num_config	= ARRAY_SIZE(sm8550_cfg),
+ };
+ 
++static const struct qcom_sct_config sm8635_cfgs = {
++	.llcc_config	= sm8635_cfg,
++	.num_config	= ARRAY_SIZE(sm8635_cfg),
++};
++
+ static const struct qcom_sct_config sm8650_cfgs = {
+ 	.llcc_config	= sm8650_cfg,
+ 	.num_config	= ARRAY_SIZE(sm8650_cfg),
+@@ -5852,6 +6012,7 @@ static const struct of_device_id qcom_llcc_of_match[] = {
+ 	{ .compatible = "qcom,sm8350-llcc", .data = &sm8350_cfgs },
+ 	{ .compatible = "qcom,sm8450-llcc", .data = &sm8450_cfgs },
+ 	{ .compatible = "qcom,sm8550-llcc", .data = &sm8550_cfgs },
++	{ .compatible = "qcom,sm8635-llcc", .data = &sm8635_cfgs },
+ 	{ .compatible = "qcom,sm8650-llcc", .data = &sm8650_cfgs },
+ 	{ .compatible = "qcom,sm8750-llcc", .data = &sm8750_cfgs },
+ 	{ .compatible = "qcom,x1e80100-llcc", .data = &x1e80100_cfgs },
+diff --git a/drivers/soc/qcom/qcom_pd_mapper.c b/drivers/soc/qcom/qcom_pd_mapper.c
+index 64ca99d7f..560ce825b 100644
+--- a/drivers/soc/qcom/qcom_pd_mapper.c
++++ b/drivers/soc/qcom/qcom_pd_mapper.c
+@@ -661,6 +661,7 @@ static const struct of_device_id qcom_pdm_domains[] __maybe_unused = {
+ 	{ .compatible = "qcom,sm8350", .data = sm8350_domains, },
+ 	{ .compatible = "qcom,sm8450", .data = sm8350_domains, },
+ 	{ .compatible = "qcom,sm8550", .data = sm8550_domains, },
++	{ .compatible = "qcom,sm8635", .data = sm8550_domains, },
+ 	{ .compatible = "qcom,sm8650", .data = sm8550_domains, },
+ 	{ .compatible = "qcom,sm8750", .data = sm8550_domains, },
+ 	{ .compatible = "qcom,x1e80100", .data = x1e80100_domains, },
+diff --git a/drivers/soc/qcom/socinfo.c b/drivers/soc/qcom/socinfo.c
+index b794ae3b1..e63526754 100644
+--- a/drivers/soc/qcom/socinfo.c
++++ b/drivers/soc/qcom/socinfo.c
+@@ -524,6 +524,10 @@ static const struct soc_id soc_id[] = {
+ 	{ qcom_board_id(IPQ5302) },
+ 	{ qcom_board_id(QCS8550) },
+ 	{ qcom_board_id(QCM8550) },
++	{ qcom_board_id(SM8635) },
++	{ qcom_board_id(SM8635P) },
++	{ qcom_board_id_named(SM8635_2, "SM8635") },
++	{ qcom_board_id_named(SM8635P_2, "SM8635P") },
+ 	{ qcom_board_id(SM8750)  },
+ 	{ qcom_board_id(IPQ5300) },
+ 	{ qcom_board_id(SM7635) },
+diff --git a/drivers/soc/qcom/ubwc_config.c b/drivers/soc/qcom/ubwc_config.c
+index a4d8769f8..a05dd9d65 100644
+--- a/drivers/soc/qcom/ubwc_config.c
++++ b/drivers/soc/qcom/ubwc_config.c
+@@ -174,6 +174,7 @@ static const struct of_device_id qcom_ubwc_configs[] __maybe_unused = {
+ 	{ .compatible = "qcom,sm8350", .data = &ubwc_4_0_hbb16, },
+ 	{ .compatible = "qcom,sm8450", .data = &ubwc_4_0_hbb16, },
+ 	{ .compatible = "qcom,sm8550", .data = &ubwc_4_0_hbb16, },
++	{ .compatible = "qcom,sm8635", .data = &ubwc_4_0_hbb16, },
+ 	{ .compatible = "qcom,sm8650", .data = &ubwc_4_0_hbb16, },
+ 	{ .compatible = "qcom,sm8750", .data = &ubwc_5_0_hbb16, },
+ 	{ .compatible = "qcom,x1e80100", .data = &ubwc_4_0_hbb16, },
+diff --git a/include/dt-bindings/arm/qcom,ids.h b/include/dt-bindings/arm/qcom,ids.h
+index 135297027..8cbdd08a1 100644
+--- a/include/dt-bindings/arm/qcom,ids.h
++++ b/include/dt-bindings/arm/qcom,ids.h
+@@ -283,11 +283,15 @@
+ #define QCOM_ID_IPQ5302			595
+ #define QCOM_ID_QCS8550			603
+ #define QCOM_ID_QCM8550			604
++#define QCOM_ID_SM8635			614
+ #define QCOM_ID_SM8750			618
+ #define QCOM_ID_IPQ5300			624
++#define QCOM_ID_SM8635P			632
+ #define QCOM_ID_SM7635			636
+ #define QCOM_ID_SM6650			640
+ #define QCOM_ID_SM6650P			641
++#define QCOM_ID_SM8635_2		642
++#define QCOM_ID_SM8635P_2		643
+ #define QCOM_ID_IPQ5321			650
+ #define QCOM_ID_IPQ5424			651
+ #define QCOM_ID_QCM6690			657
+diff --git a/include/dt-bindings/interconnect/qcom,sm8635-rpmh.h b/include/dt-bindings/interconnect/qcom,sm8635-rpmh.h
+new file mode 100644
+index 000000000..5d08c9707
+--- /dev/null
++++ b/include/dt-bindings/interconnect/qcom,sm8635-rpmh.h
+@@ -0,0 +1,159 @@
++/* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
++/*
++ * Qualcomm SM8635 (cliffs) RPMh Interconnect bindings
++ * Generated from stock vendor_boot qnoc-cliffs.ko
++ */
++
++#ifndef __DT_BINDINGS_INTERCONNECT_QCOM_SM8635_RPMH_H
++#define __DT_BINDINGS_INTERCONNECT_QCOM_SM8635_RPMH_H
++
++/* aggre1_noc (qcom,sm8635-aggre1-noc) */
++#define SM8635_AGGRE1_NOC_QHM_QSPI		0
++#define SM8635_AGGRE1_NOC_QHM_QUP0		1
++#define SM8635_AGGRE1_NOC_XM_SDC2		2
++#define SM8635_AGGRE1_NOC_XM_UFS_MEM		3
++#define SM8635_AGGRE1_NOC_XM_USB3_0		4
++#define SM8635_AGGRE1_NOC_QNS_A1NOC_SNOC		5
++
++/* aggre2_noc (qcom,sm8635-aggre2-noc) */
++#define SM8635_AGGRE2_NOC_QHM_QDSS_BAM		0
++#define SM8635_AGGRE2_NOC_QHM_QUP1		1
++#define SM8635_AGGRE2_NOC_QXM_CRYPTO		2
++#define SM8635_AGGRE2_NOC_QXM_IPA		3
++#define SM8635_AGGRE2_NOC_XM_QDSS_ETR_0		4
++#define SM8635_AGGRE2_NOC_XM_QDSS_ETR_1		5
++#define SM8635_AGGRE2_NOC_QNS_A2NOC_SNOC		6
++
++/* clk_virt (qcom,sm8635-clk-virt) */
++#define SM8635_CLK_VIRT_QUP0_CORE_MASTER		0
++#define SM8635_CLK_VIRT_QUP1_CORE_MASTER		1
++#define SM8635_CLK_VIRT_QUP0_CORE_SLAVE		2
++#define SM8635_CLK_VIRT_QUP1_CORE_SLAVE		3
++
++/* config_noc (qcom,sm8635-config-noc) */
++#define SM8635_CONFIG_NOC_QSM_CFG		0
++#define SM8635_CONFIG_NOC_QHS_AHB2PHY0		1
++#define SM8635_CONFIG_NOC_QHS_AHB2PHY1		2
++#define SM8635_CONFIG_NOC_QHS_CAMERA_CFG		3
++#define SM8635_CONFIG_NOC_QHS_CLK_CTL		4
++#define SM8635_CONFIG_NOC_QHS_CPR_CX		5
++#define SM8635_CONFIG_NOC_QHS_CPR_MMCX		6
++#define SM8635_CONFIG_NOC_QHS_CPR_MXC		7
++#define SM8635_CONFIG_NOC_QHS_CPR_NSPCX		8
++#define SM8635_CONFIG_NOC_QHS_CRYPTO0_CFG		9
++#define SM8635_CONFIG_NOC_QHS_CX_RDPM		10
++#define SM8635_CONFIG_NOC_QHS_GPUSS_CFG		11
++#define SM8635_CONFIG_NOC_QHS_I3C_IBI0_CFG		12
++#define SM8635_CONFIG_NOC_QHS_I3C_IBI1_CFG		13
++#define SM8635_CONFIG_NOC_QHS_IMEM_CFG		14
++#define SM8635_CONFIG_NOC_QHS_MSS_CFG		15
++#define SM8635_CONFIG_NOC_QHS_MX_2_RDPM		16
++#define SM8635_CONFIG_NOC_QHS_MX_RDPM		17
++#define SM8635_CONFIG_NOC_QHS_PCIE_RSCC		18
++#define SM8635_CONFIG_NOC_QHS_PDM		19
++#define SM8635_CONFIG_NOC_QHS_QDSS_CFG		20
++#define SM8635_CONFIG_NOC_QHS_QSPI		21
++#define SM8635_CONFIG_NOC_QHS_QUP0		22
++#define SM8635_CONFIG_NOC_QHS_QUP1		23
++#define SM8635_CONFIG_NOC_QHS_SDC2		24
++#define SM8635_CONFIG_NOC_QHS_TCSR		25
++#define SM8635_CONFIG_NOC_QHS_TLMM		26
++#define SM8635_CONFIG_NOC_QHS_UFS_MEM_CFG		27
++#define SM8635_CONFIG_NOC_QHS_USB3_0		28
++#define SM8635_CONFIG_NOC_QHS_VENUS_CFG		29
++#define SM8635_CONFIG_NOC_QHS_VSENSE_CTRL_CFG		30
++#define SM8635_CONFIG_NOC_QHS_WLAN_Q6		31
++#define SM8635_CONFIG_NOC_QSS_MNOC_HF_CFG		32
++#define SM8635_CONFIG_NOC_QSS_MNOC_SF_CFG		33
++#define SM8635_CONFIG_NOC_QSS_NSP_QTB_CFG		34
++#define SM8635_CONFIG_NOC_QSS_PCIE_ANOC_CFG		35
++#define SM8635_CONFIG_NOC_QSS_WLAN_Q6_THROTTLE_CFG		36
++#define SM8635_CONFIG_NOC_SRVC_CNOC_CFG		37
++#define SM8635_CONFIG_NOC_XS_QDSS_STM		38
++#define SM8635_CONFIG_NOC_XS_SYS_TCU_CFG		39
++
++/* cnoc_main (qcom,sm8635-cnoc-main) */
++#define SM8635_CNOC_MAIN_QNM_GEMNOC_CNOC		0
++#define SM8635_CNOC_MAIN_QNM_GEMNOC_PCIE		1
++#define SM8635_CNOC_MAIN_QHS_AOSS		2
++#define SM8635_CNOC_MAIN_QHS_DISPLAY_CFG		3
++#define SM8635_CNOC_MAIN_QHS_IPA		4
++#define SM8635_CNOC_MAIN_QHS_IPC_ROUTER		5
++#define SM8635_CNOC_MAIN_QHS_PCIE0_CFG		6
++#define SM8635_CNOC_MAIN_QHS_PRNG		7
++#define SM8635_CNOC_MAIN_QHS_TME_CFG		8
++#define SM8635_CNOC_MAIN_QSS_APSS		9
++#define SM8635_CNOC_MAIN_QSS_CFG		10
++#define SM8635_CNOC_MAIN_QSS_DDRSS_CFG		11
++#define SM8635_CNOC_MAIN_QXS_IMEM		12
++#define SM8635_CNOC_MAIN_SRVC_CNOC_MAIN		13
++#define SM8635_CNOC_MAIN_XS_PCIE_0		14
++
++/* gem_noc (qcom,sm8635-gem-noc) */
++#define SM8635_GEM_NOC_ALM_GPU_TCU		0
++#define SM8635_GEM_NOC_ALM_SYS_TCU		1
++#define SM8635_GEM_NOC_CHM_APPS		2
++#define SM8635_GEM_NOC_QNM_GPU		3
++#define SM8635_GEM_NOC_QNM_LPASS_GEMNOC		4
++#define SM8635_GEM_NOC_QNM_MDSP		5
++#define SM8635_GEM_NOC_QNM_MNOC_HF		6
++#define SM8635_GEM_NOC_QNM_MNOC_SF		7
++#define SM8635_GEM_NOC_QNM_NSP_GEMNOC		8
++#define SM8635_GEM_NOC_QNM_PCIE		9
++#define SM8635_GEM_NOC_QNM_SNOC_SF		10
++#define SM8635_GEM_NOC_QXM_WLAN_Q6		11
++#define SM8635_GEM_NOC_XM_GIC		12
++#define SM8635_GEM_NOC_QNS_GEM_NOC_CNOC		13
++#define SM8635_GEM_NOC_QNS_LLCC		14
++#define SM8635_GEM_NOC_QNS_PCIE		15
++
++/* lpass_ag_noc (qcom,sm8635-lpass-ag-noc) */
++#define SM8635_LPASS_AG_NOC_QNM_LPIAON_NOC		0
++#define SM8635_LPASS_AG_NOC_QNS_LPASS_AG_NOC_GEMNOC		1
++
++/* lpass_lpiaon_noc (qcom,sm8635-lpass-lpiaon-noc) */
++#define SM8635_LPASS_LPIAON_NOC_QNM_LPASS_LPINOC		0
++#define SM8635_LPASS_LPIAON_NOC_QNS_LPASS_AGGNOC		1
++
++/* lpass_lpicx_noc (qcom,sm8635-lpass-lpicx-noc) */
++#define SM8635_LPASS_LPICX_NOC_QXM_LPINOC_DSP_AXIM		0
++#define SM8635_LPASS_LPICX_NOC_QNS_LPI_AON_NOC		1
++
++/* mc_virt (qcom,sm8635-mc-virt) */
++#define SM8635_MC_VIRT_LLCC_MC		0
++#define SM8635_MC_VIRT_EBI		1
++
++/* mmss_noc (qcom,sm8635-mmss-noc) */
++#define SM8635_MMSS_NOC_QNM_CAMNOC_HF		0
++#define SM8635_MMSS_NOC_QNM_CAMNOC_ICP		1
++#define SM8635_MMSS_NOC_QNM_CAMNOC_SF		2
++#define SM8635_MMSS_NOC_QNM_MDP		3
++#define SM8635_MMSS_NOC_QNM_VIDEO		4
++#define SM8635_MMSS_NOC_QNM_VIDEO_CV_CPU		5
++#define SM8635_MMSS_NOC_QNM_VIDEO_CVP		6
++#define SM8635_MMSS_NOC_QNM_VIDEO_V_CPU		7
++#define SM8635_MMSS_NOC_QSM_HF_MNOC_CFG		8
++#define SM8635_MMSS_NOC_QSM_SF_MNOC_CFG		9
++#define SM8635_MMSS_NOC_QNS_MEM_NOC_HF		10
++#define SM8635_MMSS_NOC_QNS_MEM_NOC_SF		11
++#define SM8635_MMSS_NOC_SRVC_MNOC_HF		12
++#define SM8635_MMSS_NOC_SRVC_MNOC_SF		13
++
++/* nsp_noc (qcom,sm8635-nsp-noc) */
++#define SM8635_NSP_NOC_QXM_NSP		0
++#define SM8635_NSP_NOC_QNS_NSP_GEMNOC		1
++
++/* pcie_anoc (qcom,sm8635-pcie-anoc) */
++#define SM8635_PCIE_ANOC_QSM_PCIE_ANOC_CFG		0
++#define SM8635_PCIE_ANOC_XM_PCIE3_0		1
++#define SM8635_PCIE_ANOC_QNS_PCIE_MEM_NOC		2
++#define SM8635_PCIE_ANOC_SRVC_PCIE_AGGRE_NOC		3
++
++/* system_noc (qcom,sm8635-system-noc) */
++#define SM8635_SYSTEM_NOC_QNM_AGGRE1_NOC		0
++#define SM8635_SYSTEM_NOC_QNM_AGGRE2_NOC		1
++#define SM8635_SYSTEM_NOC_QNM_APSS_NOC		2
++#define SM8635_SYSTEM_NOC_QNM_CNOC_DATA		3
++#define SM8635_SYSTEM_NOC_QNS_GEMNOC_SF		4
++
++#endif
+-- 
+2.54.0 (Apple Git-157)
+

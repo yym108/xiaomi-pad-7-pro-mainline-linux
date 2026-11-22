@@ -1,0 +1,675 @@
+From 985dedac7d0c9e46c4e4bf4a30811ba8bfc804b0 Mon Sep 17 00:00:00 2001
+From: yym <183073514+yym108@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 13:11:42 +0800
+Subject: [PATCH 06/28] input: touchscreen: add Novatek NT36532 SPI driver for
+ Xiaomi Pad 7 Pro (muyu)
+
+---
+ .../boot/dts/qcom/sm8635-xiaomi-muyu.dts      |  27 +
+ drivers/input/touchscreen/Kconfig             |  10 +
+ drivers/input/touchscreen/Makefile            |   1 +
+ .../input/touchscreen/novatek-nt36532-spi.c   | 574 ++++++++++++++++++
+ 4 files changed, 612 insertions(+)
+ create mode 100644 drivers/input/touchscreen/novatek-nt36532-spi.c
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts b/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
+index 7c297c3a5..c26193007 100644
+--- a/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
++++ b/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
+@@ -1460,6 +1460,22 @@ qup_spi4_default: qup-spi4-default-state {
+ 				bias-disable;
+ 			};
+ 
++			ts_int_active: ts-int-active-state {
++				pins = "gpio54";
++				function = "gpio";
++				drive-strength = <2>;
++				bias-disable;
++				input-enable;
++			};
++
++			ts_lcd_id: ts-lcd-id-state {
++				pins = "gpio26";
++				function = "gpio";
++				drive-strength = <2>;
++				bias-disable;
++				input-enable;
++			};
++
+ 			pcie0_default_state: pcie0-default-state {
+ 				perst-pins {
+ 					pins = "gpio33";
+@@ -1972,6 +1988,17 @@ spi4: spi@a90000 {
+ 				dma-names = "tx", "rx";
+ 				#address-cells = <1>;
+ 				#size-cells = <0>;
++				status = "okay";
++
++				touchscreen@0 {
++					compatible = "novatek,nt36532-spi";
++					reg = <0>;
++					spi-max-frequency = <19200000>;
++					interrupts-extended = <&tlmm 54 IRQ_TYPE_EDGE_RISING>;
++					lcd-id-gpios = <&tlmm 26 GPIO_ACTIVE_HIGH>;
++					pinctrl-0 = <&ts_int_active &ts_lcd_id>;
++					pinctrl-names = "default";
++				};
+ 			};
+ 		};
+ 
+diff --git a/drivers/input/touchscreen/Kconfig b/drivers/input/touchscreen/Kconfig
+index 9b9ae8ac3..1e8c12b8c 100644
+--- a/drivers/input/touchscreen/Kconfig
++++ b/drivers/input/touchscreen/Kconfig
+@@ -701,6 +701,16 @@ config TOUCHSCREEN_NOVATEK_NVT_TS
+ 	  To compile this driver as a module, choose M here: the
+ 	  module will be called novatek-nvt-ts.
+ 
++config TOUCHSCREEN_NOVATEK_NT36532_SPI
++	tristate "Novatek NT36532 SPI touchscreen support"
++	depends on SPI
++	help
++	  Say Y here if you have a Novatek NT36532 SPI touchscreen.
++	  If unsure, say N.
++
++	  To compile this driver as a module, choose M here: the
++	  module will be called novatek-nt36532-spi.
++
+ config TOUCHSCREEN_IMAGIS
+ 	tristate "Imagis touchscreen support"
+ 	depends on I2C
+diff --git a/drivers/input/touchscreen/Makefile b/drivers/input/touchscreen/Makefile
+index bfd9de833..878f07337 100644
+--- a/drivers/input/touchscreen/Makefile
++++ b/drivers/input/touchscreen/Makefile
+@@ -69,6 +69,7 @@ obj-$(CONFIG_TOUCHSCREEN_MMS114)	+= mms114.o
+ obj-$(CONFIG_TOUCHSCREEN_MSG2638)	+= msg2638.o
+ obj-$(CONFIG_TOUCHSCREEN_MTOUCH)	+= mtouch.o
+ obj-$(CONFIG_TOUCHSCREEN_NOVATEK_NVT_TS)	+= novatek-nvt-ts.o
++obj-$(CONFIG_TOUCHSCREEN_NOVATEK_NT36532_SPI)	+= novatek-nt36532-spi.o
+ obj-$(CONFIG_TOUCHSCREEN_HP600)		+= hp680_ts_input.o
+ obj-$(CONFIG_TOUCHSCREEN_HP7XX)		+= jornada720_ts.o
+ obj-$(CONFIG_TOUCHSCREEN_IPAQ_MICRO)	+= ipaq-micro-ts.o
+diff --git a/drivers/input/touchscreen/novatek-nt36532-spi.c b/drivers/input/touchscreen/novatek-nt36532-spi.c
+new file mode 100644
+index 000000000..4fcd048b6
+--- /dev/null
++++ b/drivers/input/touchscreen/novatek-nt36532-spi.c
+@@ -0,0 +1,574 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Novatek NT36532 SPI Touchscreen driver (Xiaomi Pad 7 Pro / muyu THP mode)
++ */
++
++#include <linux/delay.h>
++#include <linux/firmware.h>
++#include <linux/gpio/consumer.h>
++#include <linux/input.h>
++#include <linux/input/mt.h>
++#include <linux/interrupt.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/spi/spi.h>
++#include <linux/unaligned.h>
++#include <linux/workqueue.h>
++
++#define NVT_SPI_PAGE_CMD		0xFF
++#define NVT_SPI_READ_MASK		0x7F
++#define NVT_SPI_WRITE_MASK		0x80
++
++#define NVT_EVENT_BUF_ADDR		0x11C400
++#define NVT_HTC_FRAME_ADDR		(NVT_EVENT_BUF_ADDR + 0x100)
++#define NVT_CHIP_VER_TRIM_ADDR		0x1FB104
++#define NVT_SWRST_SIF_ADDR		0x1FB43E
++
++#define NVT_ILM_CRC_ADDR		0x1FB500
++#define NVT_DLM_CRC_ADDR		0x1FB504
++#define NVT_BOOT_RDY_ADDR		0x1FB50D
++#define NVT_ILM_LEN_ADDR		0x1FB518
++#define NVT_ILM_DES_ADDR		0x1FB528
++#define NVT_DLM_DES_ADDR		0x1FB52C
++#define NVT_DLM_LEN_ADDR		0x1FB530
++#define NVT_CRC_FLAG_ADDR		0x1FB533
++#define NVT_CRC_ERR_FLAG_ADDR		0x1FB535
++#define NVT_TX_AUTO_COPY_EN_ADDR	0x1FC925
++
++#define NVT_MAX_SPI_XFER		65536
++#define NVT_FW_CHUNK_SIZE		0xFC00
++
++#define NVT_MAX_TOUCHES			10
++#define NVT_X_NODES			60
++#define NVT_Y_NODES			40
++#define NVT_NUM_NODES			(NVT_X_NODES * NVT_Y_NODES)
++#define NVT_HTC_HDR_LEN			64
++#define NVT_HTC_READ_LEN		(NVT_HTC_HDR_LEN + NVT_NUM_NODES * 2)
++
++#define NVT_DEFAULT_MAX_X		3200
++#define NVT_DEFAULT_MAX_Y		2136
++
++#define NVT_TOUCH_THRESH		150
++#define NVT_TOUCH_NEIGHBOR_MIN		40
++
++struct nvt_nt36532_ts {
++	struct spi_device *spi;
++	struct input_dev *input;
++	struct gpio_desc *lcd_id_gpio;
++	struct delayed_work init_work;
++	const char *fw_name;
++	u8 *tx_buf;
++	u8 *rx_buf;
++	u8 *frame_buf;
++	s32 base_sum[NVT_NUM_NODES];
++	s16 baseline[NVT_NUM_NODES];
++	s16 diff[NVT_NUM_NODES];
++	int base_frames;
++	bool base_ready;
++	bool was_touching;
++	u16 max_x;
++	u16 max_y;
++};
++
++static int nvt_spi_set_page(struct nvt_nt36532_ts *ts, u32 addr)
++{
++	struct spi_transfer xfer = {
++		.tx_buf = ts->tx_buf,
++		.len = 3,
++	};
++
++	ts->tx_buf[0] = NVT_SPI_PAGE_CMD;
++	ts->tx_buf[1] = (addr >> 15) & 0xFF;
++	ts->tx_buf[2] = (addr >> 7) & 0xFF;
++
++	return spi_sync_transfer(ts->spi, &xfer, 1);
++}
++
++static int nvt_spi_read(struct nvt_nt36532_ts *ts, u32 addr, u8 *data, size_t len)
++{
++	struct spi_transfer xfer = {
++		.tx_buf = ts->tx_buf,
++		.rx_buf = ts->rx_buf,
++		.len = len + 2,
++	};
++	int ret;
++
++	if (len + 2 > NVT_MAX_SPI_XFER)
++		return -EINVAL;
++
++	ret = nvt_spi_set_page(ts, addr);
++	if (ret)
++		return ret;
++
++	memset(ts->tx_buf, 0, len + 2);
++	ts->tx_buf[0] = addr & NVT_SPI_READ_MASK;
++
++	ret = spi_sync_transfer(ts->spi, &xfer, 1);
++	if (ret)
++		return ret;
++
++	memcpy(data, &ts->rx_buf[2], len);
++	return 0;
++}
++
++static int nvt_spi_write(struct nvt_nt36532_ts *ts, u32 addr, const u8 *data, size_t len)
++{
++	struct spi_transfer xfer = {
++		.tx_buf = ts->tx_buf,
++		.len = len + 1,
++	};
++	int ret;
++
++	if (len + 1 > NVT_MAX_SPI_XFER)
++		return -EINVAL;
++
++	ret = nvt_spi_set_page(ts, addr);
++	if (ret)
++		return ret;
++
++	ts->tx_buf[0] = (addr & NVT_SPI_READ_MASK) | NVT_SPI_WRITE_MASK;
++	memcpy(&ts->tx_buf[1], data, len);
++
++	return spi_sync_transfer(ts->spi, &xfer, 1);
++}
++
++static int nvt_spi_write_u8(struct nvt_nt36532_ts *ts, u32 addr, u8 val)
++{
++	return nvt_spi_write(ts, addr, &val, 1);
++}
++
++static int nvt_bootloader_reset(struct nvt_nt36532_ts *ts)
++{
++	int ret;
++
++	ret = nvt_spi_write_u8(ts, NVT_SWRST_SIF_ADDR, 0x69);
++	if (ret)
++		return ret;
++
++	msleep(5);
++	return 0;
++}
++
++static int nvt_write_sram(struct nvt_nt36532_ts *ts, u32 sram_addr,
++			  const u8 *data, size_t len)
++{
++	size_t offset = 0;
++	int ret;
++
++	while (offset < len) {
++		size_t chunk = min_t(size_t, len - offset, NVT_FW_CHUNK_SIZE);
++
++		ret = nvt_spi_write(ts, sram_addr + offset, data + offset, chunk);
++		if (ret)
++			return ret;
++		offset += chunk;
++	}
++
++	return 0;
++}
++
++static int nvt_set_bld_crc_bank(struct nvt_nt36532_ts *ts,
++				u32 des_addr, u32 sram_addr,
++				u32 len_addr, u32 len_val,
++				u32 crc_addr, u32 crc_val)
++{
++	u8 buf3[3];
++	u8 buf4[4];
++	int ret;
++
++	buf3[0] = sram_addr & 0xFF;
++	buf3[1] = (sram_addr >> 8) & 0xFF;
++	buf3[2] = (sram_addr >> 16) & 0xFF;
++	ret = nvt_spi_write(ts, des_addr, buf3, 3);
++	if (ret)
++		return ret;
++
++	buf3[0] = len_val & 0xFF;
++	buf3[1] = (len_val >> 8) & 0xFF;
++	buf3[2] = (len_val >> 16) & 0xFF;
++	ret = nvt_spi_write(ts, len_addr, buf3, 3);
++	if (ret)
++		return ret;
++
++	put_unaligned_le32(crc_val, buf4);
++	return nvt_spi_write(ts, crc_addr, buf4, 4);
++}
++
++static int nvt_download_fw(struct nvt_nt36532_ts *ts, const struct firmware *fw)
++{
++	static const u32 hdr_offs[] = { 0xf0, 0x1f0 };
++	u32 ilm_bin, ilm_sram, ilm_size, ilm_crc;
++	u32 dlm_bin, dlm_sram, dlm_size, dlm_crc;
++	u8 clr6[6] = { 0 };
++	u8 crc_cmd[2] = { 0xAE, 0x00 };
++	u8 ev[4] = { 0 };
++	int i, h, ret;
++
++	if (fw->size < 0x200)
++		return -EINVAL;
++
++	ilm_bin  = get_unaligned_le32(fw->data + 0x00);
++	ilm_sram = get_unaligned_le32(fw->data + 0x04);
++	ilm_size = get_unaligned_le32(fw->data + 0x08);
++	dlm_bin  = get_unaligned_le32(fw->data + 0x0C);
++	dlm_sram = get_unaligned_le32(fw->data + 0x10);
++	dlm_size = get_unaligned_le32(fw->data + 0x14);
++	ilm_crc  = get_unaligned_le32(fw->data + 0x18);
++	dlm_crc  = get_unaligned_le32(fw->data + 0x1C);
++
++	if (ilm_bin + ilm_size + 1 > fw->size || dlm_bin + dlm_size + 1 > fw->size)
++		return -EINVAL;
++
++	ret = nvt_bootloader_reset(ts);
++	if (ret)
++		return ret;
++
++	ret = nvt_set_bld_crc_bank(ts, NVT_ILM_DES_ADDR, ilm_sram,
++				   NVT_ILM_LEN_ADDR, ilm_size,
++				   NVT_ILM_CRC_ADDR, ilm_crc);
++	if (ret)
++		return ret;
++
++	ret = nvt_set_bld_crc_bank(ts, NVT_DLM_DES_ADDR, dlm_sram,
++				   NVT_DLM_LEN_ADDR, dlm_size,
++				   NVT_DLM_CRC_ADDR, dlm_crc);
++	if (ret)
++		return ret;
++
++	/* Enable TX auto copy (mode 2: 0x56) to cascaded slave IC */
++	ret = nvt_spi_write_u8(ts, NVT_TX_AUTO_COPY_EN_ADDR, 0x56);
++	if (ret)
++		return ret;
++
++	ret = nvt_write_sram(ts, ilm_sram, fw->data + ilm_bin, ilm_size + 1);
++	if (ret)
++		return ret;
++
++	ret = nvt_write_sram(ts, dlm_sram, fw->data + dlm_bin, dlm_size + 1);
++	if (ret)
++		return ret;
++
++	/* Write partition info/header sections (0x0f0 -> 0x1140a0, 0x1f0 -> 0x1141a0) */
++	for (h = 0; h < ARRAY_SIZE(hdr_offs); h++) {
++		u32 off = hdr_offs[h];
++		u32 hdr_sram = get_unaligned_le32(fw->data + off);
++		u32 hdr_size = get_unaligned_le32(fw->data + off + 4);
++		u32 hdr_bin  = get_unaligned_le32(fw->data + off + 8);
++
++		if (hdr_size >= 0x3f && hdr_bin + hdr_size + 1 <= fw->size) {
++			ret = nvt_write_sram(ts, hdr_sram, fw->data + hdr_bin, hdr_size + 1);
++			if (ret)
++				return ret;
++		}
++	}
++
++	/* Wait for TX auto copy completion */
++	for (i = 0; i < 200; i++) {
++		u8 ac_stat = 0xff;
++
++		ret = nvt_spi_read(ts, NVT_TX_AUTO_COPY_EN_ADDR, &ac_stat, 1);
++		if (!ret && ac_stat == 0)
++			break;
++		usleep_range(1000, 1100);
++	}
++	if (i == 200)
++		return -ETIMEDOUT;
++
++	/* Enable HW CRC & clear reset state buffer (EVENT_BUF + 0x60) */
++	ret = nvt_spi_write(ts, NVT_EVENT_BUF_ADDR + 0x60, clr6, sizeof(clr6));
++	if (ret)
++		return ret;
++	ret = nvt_spi_write(ts, NVT_EVENT_BUF_ADDR + 0x50, crc_cmd, sizeof(crc_cmd));
++	if (ret)
++		return ret;
++
++	/* Trigger boot ready */
++	ret = nvt_spi_write_u8(ts, NVT_BOOT_RDY_ADDR, 0x01);
++	if (ret)
++		return ret;
++	msleep(5);
++
++	for (i = 0; i < 50; i++) {
++		ret = nvt_spi_read(ts, NVT_EVENT_BUF_ADDR + 0x60, ev, 4);
++		if (!ret && ev[0] >= 0xA0 && ev[0] <= 0xAF)
++			return 0;
++		msleep(10);
++	}
++
++	dev_err(&ts->spi->dev, "NT36532 firmware boot timeout (ev60=%*ph)\n", 4, ev);
++	return -ETIMEDOUT;
++}
++
++static void nvt_process_htc_frame(struct nvt_nt36532_ts *ts)
++{
++	const u8 *raw = ts->frame_buf + NVT_HTC_HDR_LEN;
++	struct input_mt_pos pos[NVT_MAX_TOUCHES];
++	int slots[NVT_MAX_TOUCHES];
++	int i, r, c, count = 0;
++	int max_pos = 0;
++
++	if (ts->frame_buf[0] != 0xA5 || ts->frame_buf[1] != 0x61)
++		return;
++
++	if (!ts->base_ready) {
++		for (i = 0; i < NVT_NUM_NODES; i++)
++			ts->base_sum[i] += (s16)get_unaligned_le16(raw + i * 2);
++		ts->base_frames++;
++		if (ts->base_frames >= 8) {
++			for (i = 0; i < NVT_NUM_NODES; i++)
++				ts->baseline[i] = ts->base_sum[i] / ts->base_frames;
++			ts->base_ready = true;
++		}
++		return;
++	}
++
++	for (i = 0; i < NVT_NUM_NODES; i++) {
++		s16 val = (s16)get_unaligned_le16(raw + i * 2);
++		s16 d = val - ts->baseline[i];
++
++		ts->diff[i] = d;
++		if (d > max_pos)
++			max_pos = d;
++	}
++
++	if (max_pos < 80) {
++		/* Idle frame: slowly track baseline drift */
++		for (i = 0; i < NVT_NUM_NODES; i++) {
++			s16 val = (s16)get_unaligned_le16(raw + i * 2);
++
++			ts->baseline[i] = (ts->baseline[i] * 31 + val) / 32;
++		}
++		if (ts->was_touching) {
++			input_mt_assign_slots(ts->input, slots, pos, 0, 0);
++			input_mt_sync_frame(ts->input);
++			input_sync(ts->input);
++			ts->was_touching = false;
++		}
++		return;
++	}
++
++	/* Find local maxima in 3x3 neighborhood and compute 5x5 weighted centroid */
++	for (r = 0; r < NVT_Y_NODES && count < NVT_MAX_TOUCHES; r++) {
++		for (c = 0; c < NVT_X_NODES && count < NVT_MAX_TOUCHES; c++) {
++			s16 v = ts->diff[r * NVT_X_NODES + c];
++			bool is_peak = true;
++			int dr, dc;
++			s64 wsum = 0, xsum = 0, ysum = 0;
++			int x, y;
++
++			if (v < NVT_TOUCH_THRESH)
++				continue;
++
++			for (dr = -1; dr <= 1 && is_peak; dr++) {
++				int nr = r + dr;
++
++				if (nr < 0 || nr >= NVT_Y_NODES)
++					continue;
++				for (dc = -1; dc <= 1; dc++) {
++					int nc = c + dc;
++					s16 nv;
++
++					if ((dr == 0 && dc == 0) ||
++					    nc < 0 || nc >= NVT_X_NODES)
++						continue;
++					nv = ts->diff[nr * NVT_X_NODES + nc];
++					if (nv > v || (nv == v && (nr < r || (nr == r && nc < c)))) {
++						is_peak = false;
++						break;
++					}
++				}
++			}
++			if (!is_peak)
++				continue;
++
++			for (dr = -2; dr <= 2; dr++) {
++				int nr = r + dr;
++
++				if (nr < 0 || nr >= NVT_Y_NODES)
++					continue;
++				for (dc = -2; dc <= 2; dc++) {
++					int nc = c + dc;
++					s16 nv;
++
++					if (nc < 0 || nc >= NVT_X_NODES)
++						continue;
++					nv = ts->diff[nr * NVT_X_NODES + nc];
++					if (nv >= NVT_TOUCH_NEIGHBOR_MIN) {
++						wsum += nv;
++						xsum += (s64)nv * nc;
++						ysum += (s64)nv * nr;
++					}
++				}
++			}
++			if (wsum <= 0)
++				continue;
++
++			x = div64_s64(xsum * (ts->max_x - 1), wsum * (NVT_X_NODES - 1));
++			y = div64_s64(ysum * (ts->max_y - 1), wsum * (NVT_Y_NODES - 1));
++			pos[count].x = clamp_val(x, 0, ts->max_x - 1);
++			pos[count].y = clamp_val(y, 0, ts->max_y - 1);
++			count++;
++		}
++	}
++
++	if (!count && !ts->was_touching)
++		return;
++
++	input_mt_assign_slots(ts->input, slots, pos, count, 0);
++	for (i = 0; i < count; i++) {
++		input_mt_slot(ts->input, slots[i]);
++		input_mt_report_slot_state(ts->input, MT_TOOL_FINGER, true);
++		input_report_abs(ts->input, ABS_MT_POSITION_X, pos[i].x);
++		input_report_abs(ts->input, ABS_MT_POSITION_Y, pos[i].y);
++	}
++	input_mt_sync_frame(ts->input);
++	input_sync(ts->input);
++	ts->was_touching = (count > 0);
++}
++
++static irqreturn_t nvt_nt36532_irq_handler(int irq, void *dev_id)
++{
++	struct nvt_nt36532_ts *ts = dev_id;
++	int ret;
++
++	ret = nvt_spi_read(ts, NVT_HTC_FRAME_ADDR, ts->frame_buf, NVT_HTC_READ_LEN);
++	if (!ret)
++		nvt_process_htc_frame(ts);
++
++	return IRQ_HANDLED;
++}
++
++static void nvt_init_work(struct work_struct *work)
++{
++	struct nvt_nt36532_ts *ts = container_of(work, struct nvt_nt36532_ts, init_work.work);
++	struct spi_device *spi = ts->spi;
++	const struct firmware *fw = NULL;
++	u8 fw_info[24] = { 0 };
++	int ret;
++
++	ret = request_firmware(&fw, ts->fw_name, &spi->dev);
++	if (ret) {
++		dev_err(&spi->dev, "request_firmware(%s) failed: %d\n", ts->fw_name, ret);
++		return;
++	}
++
++	ret = nvt_download_fw(ts, fw);
++	release_firmware(fw);
++	if (ret) {
++		dev_err(&spi->dev, "firmware download failed: %d\n", ret);
++		return;
++	}
++
++	if (!nvt_spi_read(ts, NVT_EVENT_BUF_ADDR + 0x78, fw_info, sizeof(fw_info)) &&
++	    (u8)(fw_info[0] + fw_info[1]) == 0xFF) {
++		dev_info(&spi->dev,
++			 "NT36532 ready: fw=%s fw_ver=0x%02x x_num=%u y_num=%u (%ux%u)\n",
++			 ts->fw_name, fw_info[0], fw_info[2], fw_info[3],
++			 ts->max_x, ts->max_y);
++	}
++
++	ret = devm_request_threaded_irq(&spi->dev, spi->irq, NULL,
++					nvt_nt36532_irq_handler,
++					IRQF_TRIGGER_RISING | IRQF_ONESHOT,
++					dev_name(&spi->dev), ts);
++	if (ret)
++		dev_err(&spi->dev, "request_irq(%d) failed: %d\n", spi->irq, ret);
++}
++
++static int nvt_nt36532_probe(struct spi_device *spi)
++{
++	struct nvt_nt36532_ts *ts;
++	u8 id[6] = { 0 };
++	int lcd_id = 0;
++	int ret;
++
++	spi->mode = SPI_MODE_0;
++	spi->bits_per_word = 8;
++	ret = spi_setup(spi);
++	if (ret)
++		return dev_err_probe(&spi->dev, ret, "spi_setup failed\n");
++
++	ts = devm_kzalloc(&spi->dev, sizeof(*ts), GFP_KERNEL);
++	if (!ts)
++		return -ENOMEM;
++
++	ts->spi = spi;
++	ts->max_x = NVT_DEFAULT_MAX_X;
++	ts->max_y = NVT_DEFAULT_MAX_Y;
++	ts->tx_buf = devm_kzalloc(&spi->dev, NVT_MAX_SPI_XFER, GFP_KERNEL);
++	ts->rx_buf = devm_kzalloc(&spi->dev, NVT_MAX_SPI_XFER, GFP_KERNEL);
++	ts->frame_buf = devm_kzalloc(&spi->dev, NVT_HTC_READ_LEN, GFP_KERNEL);
++	if (!ts->tx_buf || !ts->rx_buf || !ts->frame_buf)
++		return -ENOMEM;
++
++	ts->lcd_id_gpio = devm_gpiod_get_optional(&spi->dev, "lcd-id", GPIOD_IN);
++	if (IS_ERR(ts->lcd_id_gpio))
++		return dev_err_probe(&spi->dev, PTR_ERR(ts->lcd_id_gpio),
++				     "failed to get lcd-id gpio\n");
++
++	if (ts->lcd_id_gpio)
++		lcd_id = gpiod_get_value_cansleep(ts->lcd_id_gpio);
++
++	ts->fw_name = lcd_id ? "novatek_nt36532_o81_fw_csot.bin"
++			     : "novatek_nt36532_o81_fw_tm.bin";
++
++	ret = nvt_bootloader_reset(ts);
++	if (ret)
++		return dev_err_probe(&spi->dev, ret, "bootloader reset failed\n");
++
++	ret = nvt_spi_read(ts, NVT_CHIP_VER_TRIM_ADDR, id, sizeof(id));
++	if (ret)
++		return dev_err_probe(&spi->dev, ret, "failed to read chip ver trim\n");
++
++	if (id[3] != 0x32 || id[4] != 0x65)
++		return dev_err_probe(&spi->dev, -ENODEV,
++				     "unexpected chip_id=%*ph\n", (int)sizeof(id), id);
++
++	ts->input = devm_input_allocate_device(&spi->dev);
++	if (!ts->input)
++		return -ENOMEM;
++
++	ts->input->name = "Novatek NT36532 Touchscreen";
++	ts->input->id.bustype = BUS_SPI;
++
++	input_set_abs_params(ts->input, ABS_MT_POSITION_X, 0, ts->max_x - 1, 0, 0);
++	input_set_abs_params(ts->input, ABS_MT_POSITION_Y, 0, ts->max_y - 1, 0, 0);
++	ret = input_mt_init_slots(ts->input, NVT_MAX_TOUCHES,
++				  INPUT_MT_DIRECT | INPUT_MT_DROP_UNUSED);
++	if (ret)
++		return ret;
++
++	ret = input_register_device(ts->input);
++	if (ret)
++		return ret;
++
++	spi_set_drvdata(spi, ts);
++	INIT_DELAYED_WORK(&ts->init_work, nvt_init_work);
++	schedule_delayed_work(&ts->init_work, msecs_to_jiffies(3000));
++	return 0;
++}
++
++static const struct of_device_id nvt_nt36532_of_match[] = {
++	{ .compatible = "novatek,nt36532-spi" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, nvt_nt36532_of_match);
++
++static const struct spi_device_id nvt_nt36532_spi_id[] = {
++	{ "nt36532-spi" },
++	{ }
++};
++MODULE_DEVICE_TABLE(spi, nvt_nt36532_spi_id);
++
++static struct spi_driver nvt_nt36532_driver = {
++	.driver = {
++		.name = "novatek-nt36532-spi",
++		.of_match_table = nvt_nt36532_of_match,
++	},
++	.id_table = nvt_nt36532_spi_id,
++	.probe = nvt_nt36532_probe,
++};
++module_spi_driver(nvt_nt36532_driver);
++
++MODULE_DESCRIPTION("Novatek NT36532 SPI Touchscreen Driver");
++MODULE_LICENSE("GPL");
+-- 
+2.54.0 (Apple Git-157)
+

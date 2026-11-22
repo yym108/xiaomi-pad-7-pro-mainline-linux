@@ -1,0 +1,245 @@
+From 68fa1be9a82cce495fa3db834426a8d6e9695816 Mon Sep 17 00:00:00 2001
+From: yym <183073514+yym108@users.noreply.github.com>
+Date: Sun, 22 Nov 2026 11:55:10 +0800
+Subject: [PATCH 21/28] Input: novatek-nt36532-spi - add Focus Pen Mat2/Mat3
+ ring electrode tilt support
+
+---
+ .../input/touchscreen/novatek-nt36532-spi.c   | 138 ++++++++++++++++--
+ 1 file changed, 129 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/input/touchscreen/novatek-nt36532-spi.c b/drivers/input/touchscreen/novatek-nt36532-spi.c
+index c75a0918f..6dc2e780f 100644
+--- a/drivers/input/touchscreen/novatek-nt36532-spi.c
++++ b/drivers/input/touchscreen/novatek-nt36532-spi.c
+@@ -51,6 +51,8 @@
+ 
+ #define NVT_PEN_MAT0_OFF		0x64	/* 40 rows x 12 cols (fine Y) */
+ #define NVT_PEN_MAT1_OFF		0x424	/* 8 rows x 60 cols (fine X) */
++#define NVT_PEN_MAT2_OFF		0x7E4	/* 40 rows x 12 cols (ring Y) */
++#define NVT_PEN_MAT3_OFF		0xBA4	/* 8 rows x 60 cols (ring X) */
+ #define NVT_PEN_MAT0_ROWS		40
+ #define NVT_PEN_MAT0_COLS		12
+ #define NVT_PEN_MAT1_ROWS		8
+@@ -58,6 +60,9 @@
+ #define NVT_PEN_PRESSURE_MAX		8191
+ #define NVT_PEN_BLE_TIMEOUT_MS		250
+ #define NVT_PEN_PEAK_MIN		25
++#define NVT_PEN_RING_PEAK_MIN		25
++#define NVT_PEN_RING_MAX_DIFF		300
++#define NVT_PEN_TILT_MAX		70
+ #define NVT_PEN_TOUCH_DOWN_MIN		120
+ #define NVT_PEN_TOUCH_UP_MIN		85
+ #define NVT_PEN_NEIGHBOR_MIN		10
+@@ -89,6 +94,12 @@ struct nvt_nt36532_ts {
+ 	bool pen_active;
+ 	bool pen_touching;
+ 	int pen_miss_cnt;
++	bool pen_ring_valid;
++	int pen_ring_miss;
++	int pen_ring_x;
++	int pen_ring_y;
++	s8 pen_tilt_x;
++	s8 pen_tilt_y;
+ 	unsigned long pen_ble_jiffies;
+ 	u16 pen_ble_pressure;
+ 	u8 pen_ble_buttons;
+@@ -326,15 +337,42 @@ static int nvt_download_fw(struct nvt_nt36532_ts *ts, const struct firmware *fw)
+ 	return -ETIMEDOUT;
+ }
+ 
++static s8 nvt_diff_to_tilt_deg(int diff)
++{
++	/* Piecewise linear calibration from o81_thp_config.ini (stylus_coor_diff -> stylus_angle) */
++	static const int d_tbl[] = { 0, 45, 74, 96, 114, 126 };
++	static const int a_tbl[] = { 0, 15, 30, 45, 60, 70 };
++	int ad = abs(diff);
++	int deg = NVT_PEN_TILT_MAX;
++	int i;
++
++	for (i = 1; i < ARRAY_SIZE(d_tbl); i++) {
++		if (ad <= d_tbl[i]) {
++			deg = a_tbl[i - 1] +
++			      (ad - d_tbl[i - 1]) * (a_tbl[i] - a_tbl[i - 1]) /
++			      (d_tbl[i] - d_tbl[i - 1]);
++			break;
++		}
++	}
++
++	return diff < 0 ? -deg : deg;
++}
++
+ static void nvt_release_pen(struct nvt_nt36532_ts *ts)
+ {
+ 	ts->pen_miss_cnt = 0;
+ 	ts->pen_touching = false;
++	ts->pen_ring_valid = false;
++	ts->pen_ring_miss = 0;
++	ts->pen_tilt_x = 0;
++	ts->pen_tilt_y = 0;
+ 	if (!ts->pen_active)
+ 		return;
+ 
+ 	input_report_abs(ts->pen_input, ABS_PRESSURE, 0);
+ 	input_report_abs(ts->pen_input, ABS_DISTANCE, 0);
++	input_report_abs(ts->pen_input, ABS_TILT_X, 0);
++	input_report_abs(ts->pen_input, ABS_TILT_Y, 0);
+ 	input_report_key(ts->pen_input, BTN_STYLUS, 0);
+ 	input_report_key(ts->pen_input, BTN_STYLUS2, 0);
+ 	input_report_key(ts->pen_input, BTN_STYLUS3, 0);
+@@ -348,8 +386,11 @@ static void nvt_process_stylus_frame(struct nvt_nt36532_ts *ts)
+ {
+ 	const u8 *mat0 = ts->frame_buf + NVT_PEN_MAT0_OFF;
+ 	const u8 *mat1 = ts->frame_buf + NVT_PEN_MAT1_OFF;
++	const u8 *mat2 = ts->frame_buf + NVT_PEN_MAT2_OFF;
++	const u8 *mat3 = ts->frame_buf + NVT_PEN_MAT3_OFF;
+ 	int r, c, r0 = 0, c0 = 0, r1 = 0, c1 = 0;
+-	s16 peak0 = 0, peak1 = 0;
++	int r2 = 0, c2 = 0, r3 = 0, c3 = 0;
++	s16 peak0 = 0, peak1 = 0, peak2 = 0, peak3 = 0;
+ 	s64 wsum = 0, xsum = 0, ysum = 0;
+ 	int x, y;
+ 	u16 pressure;
+@@ -365,29 +406,88 @@ static void nvt_process_stylus_frame(struct nvt_nt36532_ts *ts)
+ 		ts->was_touching = false;
+ 	}
+ 
+-	/* Mat0 (40 rows x 12 cols): high-resolution Y axis */
++	/* Mat0 (tip Y) & Mat2 (ring Y): 40 rows x 12 cols */
+ 	for (r = 0; r < NVT_PEN_MAT0_ROWS; r++) {
+ 		for (c = 0; c < NVT_PEN_MAT0_COLS; c++) {
+-			s16 v = (s16)get_unaligned_le16(mat0 + (r * NVT_PEN_MAT0_COLS + c) * 2);
++			int idx = (r * NVT_PEN_MAT0_COLS + c) * 2;
++			s16 v0 = (s16)get_unaligned_le16(mat0 + idx);
++			s16 v2 = (s16)get_unaligned_le16(mat2 + idx);
+ 
+-			if (v > peak0) {
+-				peak0 = v;
++			if (v0 > peak0) {
++				peak0 = v0;
+ 				r0 = r;
+ 				c0 = c;
+ 			}
++			if (v2 > peak2) {
++				peak2 = v2;
++				r2 = r;
++				c2 = c;
++			}
+ 		}
+ 	}
+ 
+-	/* Mat1 (8 rows x 60 cols): high-resolution X axis */
++	/* Mat1 (tip X) & Mat3 (ring X): 8 rows x 60 cols */
+ 	for (r = 0; r < NVT_PEN_MAT1_ROWS; r++) {
+ 		for (c = 0; c < NVT_PEN_MAT1_COLS; c++) {
+-			s16 v = (s16)get_unaligned_le16(mat1 + (r * NVT_PEN_MAT1_COLS + c) * 2);
++			int idx = (r * NVT_PEN_MAT1_COLS + c) * 2;
++			s16 v1 = (s16)get_unaligned_le16(mat1 + idx);
++			s16 v3 = (s16)get_unaligned_le16(mat3 + idx);
+ 
+-			if (v > peak1) {
+-				peak1 = v;
++			if (v1 > peak1) {
++				peak1 = v1;
+ 				r1 = r;
+ 				c1 = c;
+ 			}
++			if (v3 > peak3) {
++				peak3 = v3;
++				r3 = r;
++				c3 = c;
++			}
++		}
++	}
++
++	/* Update ring electrode centroid independently (supports multiplexed sub-frames) */
++	if (peak2 >= NVT_PEN_RING_PEAK_MIN && peak3 >= NVT_PEN_RING_PEAK_MIN) {
++		s64 rw = 0, ry = 0, rx = 0;
++		int ry_px, rx_px;
++
++		for (r = max(0, r2 - 2); r <= min(NVT_PEN_MAT0_ROWS - 1, r2 + 2); r++) {
++			for (c = max(0, c2 - 1); c <= min(NVT_PEN_MAT0_COLS - 1, c2 + 1); c++) {
++				s16 v = (s16)get_unaligned_le16(mat2 + (r * NVT_PEN_MAT0_COLS + c) * 2);
++
++				if (v >= NVT_PEN_NEIGHBOR_MIN) {
++					rw += v;
++					ry += (s64)v * r;
++				}
++			}
++		}
++		if (rw > 0) {
++			ry_px = div64_s64(ry * (ts->max_y - 1), rw * (NVT_PEN_MAT0_ROWS - 1));
++			ry_px = (ts->max_y - 1) - clamp_val(ry_px, 0, ts->max_y - 1);
++			rw = 0;
++			for (r = max(0, r3 - 1); r <= min(NVT_PEN_MAT1_ROWS - 1, r3 + 1); r++) {
++				for (c = max(0, c3 - 2); c <= min(NVT_PEN_MAT1_COLS - 1, c3 + 2); c++) {
++					s16 v = (s16)get_unaligned_le16(mat3 + (r * NVT_PEN_MAT1_COLS + c) * 2);
++
++					if (v >= NVT_PEN_NEIGHBOR_MIN) {
++						rw += v;
++						rx += (s64)v * c;
++					}
++				}
++			}
++			if (rw > 0) {
++				rx_px = div64_s64(rx * (ts->max_x - 1), rw * (NVT_PEN_MAT1_COLS - 1));
++				ts->pen_ring_x = clamp_val(rx_px, 0, ts->max_x - 1);
++				ts->pen_ring_y = ry_px;
++				ts->pen_ring_valid = true;
++				ts->pen_ring_miss = 0;
++			}
++		}
++	} else if (ts->pen_ring_valid) {
++		if (++ts->pen_ring_miss >= NVT_PEN_MISS_MAX) {
++			ts->pen_ring_valid = false;
++			ts->pen_tilt_x = 0;
++			ts->pen_tilt_y = 0;
+ 		}
+ 	}
+ 
+@@ -469,6 +569,20 @@ static void nvt_process_stylus_frame(struct nvt_nt36532_ts *ts)
+ 			}
+ 		}
+ 
++		if (ts->pen_ring_valid) {
++			int dx = ts->pen_ring_x - x;
++			int dy = ts->pen_ring_y - y;
++
++			if (abs(dx) <= NVT_PEN_RING_MAX_DIFF &&
++			    abs(dy) <= NVT_PEN_RING_MAX_DIFF) {
++				s8 tx = nvt_diff_to_tilt_deg(dx);
++				s8 ty = nvt_diff_to_tilt_deg(dy);
++
++				ts->pen_tilt_x = (ts->pen_tilt_x * 3 + tx) / 4;
++				ts->pen_tilt_y = (ts->pen_tilt_y * 3 + ty) / 4;
++			}
++		}
++
+ 		input_report_key(ts->pen_input, BTN_TOOL_PEN, 1);
+ 		input_report_key(ts->pen_input, BTN_TOUCH, ts->pen_touching);
+ 		input_report_key(ts->pen_input, BTN_STYLUS, !!(buttons & BIT(0)));
+@@ -478,6 +592,8 @@ static void nvt_process_stylus_frame(struct nvt_nt36532_ts *ts)
+ 		input_report_abs(ts->pen_input, ABS_Y, y);
+ 		input_report_abs(ts->pen_input, ABS_PRESSURE, pressure);
+ 		input_report_abs(ts->pen_input, ABS_DISTANCE, ts->pen_touching ? 0 : 1);
++		input_report_abs(ts->pen_input, ABS_TILT_X, ts->pen_tilt_x);
++		input_report_abs(ts->pen_input, ABS_TILT_Y, ts->pen_tilt_y);
+ 		input_sync(ts->pen_input);
+ 	}
+ 	ts->pen_active = true;
+@@ -771,8 +887,12 @@ static int nvt_nt36532_probe(struct spi_device *spi)
+ 	input_set_abs_params(ts->pen_input, ABS_Y, 0, ts->max_y - 1, 0, 0);
+ 	input_set_abs_params(ts->pen_input, ABS_PRESSURE, 0, NVT_PEN_PRESSURE_MAX, 0, 0);
+ 	input_set_abs_params(ts->pen_input, ABS_DISTANCE, 0, 1, 0, 0);
++	input_set_abs_params(ts->pen_input, ABS_TILT_X, -NVT_PEN_TILT_MAX, NVT_PEN_TILT_MAX, 0, 0);
++	input_set_abs_params(ts->pen_input, ABS_TILT_Y, -NVT_PEN_TILT_MAX, NVT_PEN_TILT_MAX, 0, 0);
+ 	input_abs_set_res(ts->pen_input, ABS_X, 13);
+ 	input_abs_set_res(ts->pen_input, ABS_Y, 13);
++	input_abs_set_res(ts->pen_input, ABS_TILT_X, 57);
++	input_abs_set_res(ts->pen_input, ABS_TILT_Y, 57);
+ 
+ 	ret = input_register_device(ts->pen_input);
+ 	if (ret)
+-- 
+2.54.0 (Apple Git-157)
+

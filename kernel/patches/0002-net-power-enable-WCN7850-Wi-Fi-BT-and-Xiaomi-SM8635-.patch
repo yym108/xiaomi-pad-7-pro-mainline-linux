@@ -1,0 +1,174 @@
+From 4f31d2497d0a7ef0c99d5a417ff5e7610c44354f Mon Sep 17 00:00:00 2001
+From: yym <183073514+yym108@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 11:36:11 +0800
+Subject: [PATCH 02/28] net/power: enable WCN7850 Wi-Fi/BT and Xiaomi SM8635
+ battmgr offset
+
+---
+ drivers/bluetooth/hci_qca.c                |  1 +
+ drivers/net/wireless/ath/ath12k/core.c     |  1 +
+ drivers/pci/pwrctrl/Kconfig                |  2 +-
+ drivers/power/sequencing/pwrseq-qcom-wcn.c | 15 +++++++++-
+ drivers/power/supply/qcom_battmgr.c        | 33 ++++++++++++----------
+ 5 files changed, 35 insertions(+), 17 deletions(-)
+
+diff --git a/drivers/bluetooth/hci_qca.c b/drivers/bluetooth/hci_qca.c
+index 4cebd0a99..e61d20fe0 100644
+--- a/drivers/bluetooth/hci_qca.c
++++ b/drivers/bluetooth/hci_qca.c
+@@ -2065,6 +2065,7 @@ static int qca_setup(struct hci_uart *hu)
+ 		if (retries < MAX_INIT_RETRIES) {
+ 			bt_dev_warn(hdev, "Retry BT power ON:%d", retries);
+ 			if (hu->serdev) {
++				serdev_device_write_flush(hu->serdev);
+ 				serdev_device_close(hu->serdev);
+ 				ret = serdev_device_open(hu->serdev);
+ 				if (ret) {
+diff --git a/drivers/net/wireless/ath/ath12k/core.c b/drivers/net/wireless/ath/ath12k/core.c
+index 353fb9c5a..4ca5c5819 100644
+--- a/drivers/net/wireless/ath/ath12k/core.c
++++ b/drivers/net/wireless/ath/ath12k/core.c
+@@ -87,6 +87,7 @@ static const struct ath12k_core_broken_rfkill_table {
+ 	{ ATH12K_HW_WCN7850_HW20, "microsoft,denali" },
+ 	{ ATH12K_HW_WCN7850_HW20, "microsoft,romulus13" },
+ 	{ ATH12K_HW_WCN7850_HW20, "microsoft,romulus15" },
++	{ ATH12K_HW_WCN7850_HW20, "xiaomi,muyu" },
+ 	{ /* Sentinel */ }
+ };
+ 
+diff --git a/drivers/pci/pwrctrl/Kconfig b/drivers/pci/pwrctrl/Kconfig
+index a2fc2a359..6f50b82c1 100644
+--- a/drivers/pci/pwrctrl/Kconfig
++++ b/drivers/pci/pwrctrl/Kconfig
+@@ -7,7 +7,7 @@ config PCI_PWRCTRL
+ 	tristate
+ 
+ config PCI_PWRCTRL_PWRSEQ
+-	tristate
++	tristate "PCI Power Control driver for power sequenced devices"
+ 	select POWER_SEQUENCING
+ 	select PCI_PWRCTRL
+ 
+diff --git a/drivers/power/sequencing/pwrseq-qcom-wcn.c b/drivers/power/sequencing/pwrseq-qcom-wcn.c
+index e51b655ad..7d634edb0 100644
+--- a/drivers/power/sequencing/pwrseq-qcom-wcn.c
++++ b/drivers/power/sequencing/pwrseq-qcom-wcn.c
+@@ -98,8 +98,14 @@ static const struct pwrseq_unit_data pwrseq_qcom_wcn_vregs_unit_data = {
+ static int pwrseq_qcom_wcn_clk_enable(struct pwrseq_device *pwrseq)
+ {
+ 	struct pwrseq_qcom_wcn_ctx *ctx = pwrseq_device_get_drvdata(pwrseq);
++	int ret;
++
++	ret = clk_prepare_enable(ctx->clk);
++	if (ret)
++		return ret;
+ 
+-	return clk_prepare_enable(ctx->clk);
++	msleep(20);
++	return 0;
+ }
+ 
+ static int pwrseq_qcom_wcn_clk_disable(struct pwrseq_device *pwrseq)
+@@ -179,6 +185,8 @@ static int pwrseq_qcom_wcn_bt_disable(struct pwrseq_device *pwrseq)
+ 	struct pwrseq_qcom_wcn_ctx *ctx = pwrseq_device_get_drvdata(pwrseq);
+ 
+ 	gpiod_set_value_cansleep(ctx->bt_gpio, 0);
++	msleep(50);
++	ctx->last_gpio_enable_jf = jiffies;
+ 
+ 	return 0;
+ }
+@@ -226,6 +234,8 @@ static int pwrseq_qcom_wcn_wlan_disable(struct pwrseq_device *pwrseq)
+ 	struct pwrseq_qcom_wcn_ctx *ctx = pwrseq_device_get_drvdata(pwrseq);
+ 
+ 	gpiod_set_value_cansleep(ctx->wlan_gpio, 0);
++	msleep(50);
++	ctx->last_gpio_enable_jf = jiffies;
+ 
+ 	return 0;
+ }
+@@ -428,6 +438,7 @@ static const struct pwrseq_qcom_wcn_pdata pwrseq_wcn7850_of_data = {
+ 	.vregs = pwrseq_wcn7850_vregs,
+ 	.num_vregs = ARRAY_SIZE(pwrseq_wcn7850_vregs),
+ 	.pwup_delay_ms = 100,
++	.gpio_enable_delay_ms = 100,
+ 	.targets = pwrseq_qcom_wcn_targets,
+ };
+ 
+@@ -542,6 +553,8 @@ static int pwrseq_qcom_wcn_probe(struct platform_device *pdev)
+ 		return dev_err_probe(dev, PTR_ERR(ctx->clk),
+ 				     "Failed to get the reference clock\n");
+ 
++	ctx->last_gpio_enable_jf = jiffies;
++
+ 	memset(&config, 0, sizeof(config));
+ 
+ 	config.parent = dev;
+diff --git a/drivers/power/supply/qcom_battmgr.c b/drivers/power/supply/qcom_battmgr.c
+index 58e238e6f..11f0951c5 100644
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -59,21 +59,21 @@ enum qcom_battmgr_variant {
+ #define BATT_CURR_NOW			9
+ #define BATT_CHG_CTRL_LIM		10
+ #define BATT_CHG_CTRL_LIM_MAX		11
+-#define BATT_TEMP			12
+-#define BATT_TECHNOLOGY			13
+-#define BATT_CHG_COUNTER		14
+-#define BATT_CYCLE_COUNT		15
+-#define BATT_CHG_FULL_DESIGN		16
+-#define BATT_CHG_FULL			17
+-#define BATT_MODEL_NAME			18
+-#define BATT_TTF_AVG			19
+-#define BATT_TTE_AVG			20
+-#define BATT_RESISTANCE			21
+-#define BATT_POWER_NOW			22
+-#define BATT_POWER_AVG			23
+-#define BATT_CHG_CTRL_EN		24
+-#define BATT_CHG_CTRL_START_THR		25
+-#define BATT_CHG_CTRL_END_THR		26
++#define BATT_TEMP			13
++#define BATT_TECHNOLOGY			14
++#define BATT_CHG_COUNTER		15
++#define BATT_CYCLE_COUNT		16
++#define BATT_CHG_FULL_DESIGN		17
++#define BATT_CHG_FULL			18
++#define BATT_MODEL_NAME			19
++#define BATT_TTF_AVG			20
++#define BATT_TTE_AVG			21
++#define BATT_RESISTANCE			22
++#define BATT_POWER_NOW			23
++#define BATT_POWER_AVG			24
++#define BATT_CHG_CTRL_EN		25
++#define BATT_CHG_CTRL_START_THR		26
++#define BATT_CHG_CTRL_END_THR		27
+ 
+ #define BATTMGR_USB_PROPERTY_GET	0x32
+ #define BATTMGR_USB_PROPERTY_SET	0x33
+@@ -1210,6 +1210,7 @@ static void qcom_battmgr_notification(struct qcom_battmgr *battmgr,
+ 	case NOTIF_BAT_STATUS:
+ 	case NOTIF_BAT_PROPERTY:
+ 	case NOTIF_BAT_CHARGING_STATE:
++	case 0x50:
+ 		power_supply_changed(battmgr->bat_psy);
+ 		break;
+ 	case NOTIF_USB_PROPERTY:
+@@ -1585,6 +1586,7 @@ static void qcom_battmgr_sm8350_callback(struct qcom_battmgr *battmgr,
+ 		break;
+ 	case BATTMGR_REQUEST_NOTIFICATION:
+ 	case BATTMGR_CHG_CTRL_LIMIT_EN:
++	case 0x50:
+ 		battmgr->error = 0;
+ 		break;
+ 	default:
+@@ -1717,6 +1719,7 @@ static int qcom_battmgr_probe(struct auxiliary_device *adev,
+ 			return dev_err_probe(dev, PTR_ERR(battmgr->wls_psy),
+ 					     "failed to register wireless charing power supply\n");
+ 	} else {
++		battmgr->unit = QCOM_BATTMGR_UNIT_mAh;
+ 		if (battmgr->variant == QCOM_BATTMGR_SM8550)
+ 			psy_desc = &sm8550_bat_psy_desc;
+ 		else
+-- 
+2.54.0 (Apple Git-157)
+

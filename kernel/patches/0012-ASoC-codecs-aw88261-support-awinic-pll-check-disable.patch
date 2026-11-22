@@ -1,0 +1,67 @@
+From 5b4d62ccfa32a9c534f7e8c5bcd8f7dc43734303 Mon Sep 17 00:00:00 2001
+From: yym <183073514+yym108@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 16:28:13 +0800
+Subject: [PATCH 12/28] ASoC: codecs: aw88261: support awinic,pll-check-disable
+ DT property
+
+---
+ sound/soc/codecs/aw88261.c | 16 ++++++++++++----
+ sound/soc/codecs/aw88261.h |  1 +
+ 2 files changed, 13 insertions(+), 4 deletions(-)
+
+diff --git a/sound/soc/codecs/aw88261.c b/sound/soc/codecs/aw88261.c
+index db1eb74b8..4e6b43d44 100644
+--- a/sound/soc/codecs/aw88261.c
++++ b/sound/soc/codecs/aw88261.c
+@@ -194,6 +194,9 @@ static int aw88261_dev_configure_syspll(struct aw88261 *aw88261)
+ 	if (ret)
+ 		return ret;
+ 
++	if (aw88261->pll_check_disable)
++		return 0;
++
+ 	return aw88261_dev_check_pll(aw_dev);
+ }
+ 
+@@ -524,10 +527,12 @@ static int aw88261_dev_start(struct aw88261 *aw88261)
+ 	usleep_range(AW88261_1000_US, AW88261_1000_US + 50);
+ 
+ 	/* check i2s status */
+-	ret = aw88261_dev_check_sysst(aw_dev);
+-	if (ret) {
+-		dev_dbg(aw_dev->dev, "sysst check failed");
+-		goto sysst_check_fail;
++	if (!aw88261->pll_check_disable) {
++		ret = aw88261_dev_check_sysst(aw_dev);
++		if (ret) {
++			dev_dbg(aw_dev->dev, "sysst check failed");
++			goto sysst_check_fail;
++		}
+ 	}
+ 
+ 	/* enable tx feedback */
+@@ -1266,6 +1271,9 @@ static void aw88261_parse_channel_dt(struct aw88261 *aw88261)
+ 
+ 	of_property_read_u32(np, "awinic,audio-channel", &channel_value);
+ 	aw88261->phase_sync = of_property_read_bool(np, "awinic,sync-flag");
++	aw88261->pll_check_disable =
++		of_property_read_bool(np, "awinic,pll-check-disable") ||
++		of_property_read_bool(np, "pll-check-disable");
+ 
+ 	aw_dev->channel = channel_value;
+ }
+diff --git a/sound/soc/codecs/aw88261.h b/sound/soc/codecs/aw88261.h
+index f16f9f8c4..aecbae3e7 100644
+--- a/sound/soc/codecs/aw88261.h
++++ b/sound/soc/codecs/aw88261.h
+@@ -607,6 +607,7 @@ struct aw88261 {
+ 	unsigned int rxr_slotvld_mask;
+ 
+ 	bool phase_sync;
++	bool pll_check_disable;
+ };
+ 
+ #endif
+-- 
+2.54.0 (Apple Git-157)
+

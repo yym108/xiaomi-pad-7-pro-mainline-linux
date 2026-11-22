@@ -1,0 +1,65 @@
+From afcbd902d8ef5a39147a895b2e4f791520768824 Mon Sep 17 00:00:00 2001
+From: yym <183073514+yym108@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 16:28:14 +0800
+Subject: [PATCH 13/28] arm64: dts: qcom: sm8635-xiaomi-muyu: configure
+ QUINARY_MI2S bclk and AW88261 pll-check-disable
+
+---
+ arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts b/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
+index 21c2e0155..ade605ffe 100644
+--- a/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
++++ b/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
+@@ -2216,6 +2216,7 @@ spkr_top_left: audio-codec@34 {
+ 					dvdd-supply = <&vreg_l7b_1p8>;
+ 					reset-gpios = <&tlmm 30 GPIO_ACTIVE_HIGH>;
+ 					awinic,audio-channel = <0>;
++					awinic,pll-check-disable;
+ 					sound-name-prefix = "SpkrTopLeft";
+ 					#sound-dai-cells = <0>;
+ 				};
+@@ -2226,6 +2227,7 @@ spkr_bot_left: audio-codec@35 {
+ 					dvdd-supply = <&vreg_l7b_1p8>;
+ 					reset-gpios = <&tlmm 149 GPIO_ACTIVE_HIGH>;
+ 					awinic,audio-channel = <1>;
++					awinic,pll-check-disable;
+ 					sound-name-prefix = "SpkrBotLeft";
+ 					#sound-dai-cells = <0>;
+ 				};
+@@ -2236,6 +2238,7 @@ spkr_top_right: audio-codec@36 {
+ 					dvdd-supply = <&vreg_l7b_1p8>;
+ 					reset-gpios = <&tlmm 123 GPIO_ACTIVE_HIGH>;
+ 					awinic,audio-channel = <2>;
++					awinic,pll-check-disable;
+ 					sound-name-prefix = "SpkrTopRight";
+ 					#sound-dai-cells = <0>;
+ 				};
+@@ -2246,6 +2249,7 @@ spkr_bot_right: audio-codec@37 {
+ 					dvdd-supply = <&vreg_l7b_1p8>;
+ 					reset-gpios = <&tlmm 124 GPIO_ACTIVE_HIGH>;
+ 					awinic,audio-channel = <3>;
++					awinic,pll-check-disable;
+ 					sound-name-prefix = "SpkrBotRight";
+ 					#sound-dai-cells = <0>;
+ 				};
+@@ -2488,6 +2492,15 @@ q6apm: service@1 {
+ 						q6apmbedai: bedais {
+ 							compatible = "qcom,q6apm-lpass-dais";
+ 							#sound-dai-cells = <1>;
++							#address-cells = <1>;
++							#size-cells = <0>;
++
++							dai@127 {
++								reg = <QUINARY_MI2S_RX>;
++								clocks = <&q6prmcc LPASS_CLK_ID_QUI_MI2S_IBIT
++										   LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
++								clock-names = "bclk";
++							};
+ 						};
+ 
+ 						q6apmdai: dais {
+-- 
+2.54.0 (Apple Git-157)
+

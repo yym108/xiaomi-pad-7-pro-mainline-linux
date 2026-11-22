@@ -1,0 +1,36 @@
+From eab70345012d32d4df8b3149ac532ca1f6fb428c Mon Sep 17 00:00:00 2001
+From: yym <183073514+yym108@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 16:28:13 +0800
+Subject: [PATCH 11/28] Input: novatek-nt36532-spi - fix Y-axis inversion and
+ enable INPUT_MT_TRACK
+
+---
+ drivers/input/touchscreen/novatek-nt36532-spi.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/input/touchscreen/novatek-nt36532-spi.c b/drivers/input/touchscreen/novatek-nt36532-spi.c
+index 4fcd048b6..1d4fee48c 100644
+--- a/drivers/input/touchscreen/novatek-nt36532-spi.c
++++ b/drivers/input/touchscreen/novatek-nt36532-spi.c
+@@ -406,7 +406,7 @@ static void nvt_process_htc_frame(struct nvt_nt36532_ts *ts)
+ 			x = div64_s64(xsum * (ts->max_x - 1), wsum * (NVT_X_NODES - 1));
+ 			y = div64_s64(ysum * (ts->max_y - 1), wsum * (NVT_Y_NODES - 1));
+ 			pos[count].x = clamp_val(x, 0, ts->max_x - 1);
+-			pos[count].y = clamp_val(y, 0, ts->max_y - 1);
++			pos[count].y = (ts->max_y - 1) - clamp_val(y, 0, ts->max_y - 1);
+ 			count++;
+ 		}
+ 	}
+@@ -534,7 +534,8 @@ static int nvt_nt36532_probe(struct spi_device *spi)
+ 	input_set_abs_params(ts->input, ABS_MT_POSITION_X, 0, ts->max_x - 1, 0, 0);
+ 	input_set_abs_params(ts->input, ABS_MT_POSITION_Y, 0, ts->max_y - 1, 0, 0);
+ 	ret = input_mt_init_slots(ts->input, NVT_MAX_TOUCHES,
+-				  INPUT_MT_DIRECT | INPUT_MT_DROP_UNUSED);
++				  INPUT_MT_DIRECT | INPUT_MT_DROP_UNUSED |
++				  INPUT_MT_TRACK);
+ 	if (ret)
+ 		return ret;
+ 
+-- 
+2.54.0 (Apple Git-157)
+

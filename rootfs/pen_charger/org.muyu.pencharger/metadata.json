@@ -1,0 +1,18 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "muyu"
+            }
+        ],
+        "Category": "System Information",
+        "Description": "小米平板 7 Pro 焦点触控笔磁吸无线充电与电量监控",
+        "Icon": "draw-freehand",
+        "Id": "org.muyu.pencharger",
+        "License": "GPL-2.0+",
+        "Name": "焦点触控笔磁吸充",
+        "Version": "1.0"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

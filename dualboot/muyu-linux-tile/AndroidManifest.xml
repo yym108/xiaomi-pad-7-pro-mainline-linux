@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.muyu.ubuntutile"
+    android:versionCode="3"
+    android:versionName="2.1">
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
+    <application
+        android:label="切换 Arch Linux"
+        android:icon="@drawable/ic_qs_ubuntu"
+        android:roundIcon="@drawable/ic_qs_ubuntu">
+        <activity
+            android:name=".SwitchActivity"
+            android:label="切换 Arch Linux"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:excludeFromRecents="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <service
+            android:name=".UbuntuTileService"
+            android:label="切换 Arch Linux"
+            android:icon="@drawable/ic_qs_ubuntu"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>

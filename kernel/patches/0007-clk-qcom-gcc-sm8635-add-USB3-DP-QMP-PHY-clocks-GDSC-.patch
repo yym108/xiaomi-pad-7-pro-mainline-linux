@@ -1,0 +1,174 @@
+From 28b69f38165ba0d8f5e998ccf528b5fb8a0f323d Mon Sep 17 00:00:00 2001
+From: yym <183073514+yym108@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 14:55:29 +0800
+Subject: [PATCH 07/28] clk: qcom: gcc-sm8635: add USB3/DP QMP PHY clocks, GDSC
+ and resets
+
+---
+ drivers/clk/qcom/gcc-sm8635.c | 115 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 115 insertions(+)
+
+diff --git a/drivers/clk/qcom/gcc-sm8635.c b/drivers/clk/qcom/gcc-sm8635.c
+index cc89dceae..8439c2532 100644
+--- a/drivers/clk/qcom/gcc-sm8635.c
++++ b/drivers/clk/qcom/gcc-sm8635.c
+@@ -30,6 +30,7 @@ enum {
+ 	DT_UFS_PHY_RX_SYMBOL_1,
+ 	DT_UFS_PHY_TX_SYMBOL_0,
+ 	DT_PCIE_0_PIPE,
++	DT_USB3_PHY_WRAPPER_GCC_USB30_PIPE,
+ };
+ 
+ enum {
+@@ -41,6 +42,7 @@ enum {
+ 	P_UFS_PHY_RX_SYMBOL_0_CLK,
+ 	P_UFS_PHY_RX_SYMBOL_1_CLK,
+ 	P_UFS_PHY_TX_SYMBOL_0_CLK,
++	P_USB3_PHY_WRAPPER_GCC_USB30_PIPE_CLK,
+ };
+ 
+ static struct clk_alpha_pll gcc_gpll0 = {
+@@ -1260,6 +1262,111 @@ static struct gdsc usb30_prim_gdsc = {
+ 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
+ };
+ 
++static const struct parent_map gcc_parent_map_15[] = {
++	{ P_USB3_PHY_WRAPPER_GCC_USB30_PIPE_CLK, 0 },
++	{ P_BI_TCXO, 2 },
++};
++
++static const struct clk_parent_data gcc_parent_data_15[] = {
++	{ .index = DT_USB3_PHY_WRAPPER_GCC_USB30_PIPE },
++	{ .index = DT_BI_TCXO },
++};
++
++static struct clk_regmap_mux gcc_usb3_prim_phy_pipe_clk_src = {
++	.reg = 0x3906c,
++	.shift = 0,
++	.width = 2,
++	.parent_map = gcc_parent_map_15,
++	.clkr = {
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_usb3_prim_phy_pipe_clk_src",
++			.parent_data = gcc_parent_data_15,
++			.num_parents = ARRAY_SIZE(gcc_parent_data_15),
++			.ops = &clk_regmap_mux_closest_ops,
++		},
++	},
++};
++
++static struct clk_rcg2 gcc_usb3_prim_phy_aux_clk_src = {
++	.cmd_rcgr = 0x39070,
++	.mnd_width = 0,
++	.hid_width = 5,
++	.parent_map = gcc_parent_map_4,
++	.freq_tbl = ftbl_gcc_pcie_0_aux_clk_src,
++	.clkr.hw.init = &(const struct clk_init_data) {
++		.name = "gcc_usb3_prim_phy_aux_clk_src",
++		.parent_data = gcc_parent_data_4,
++		.num_parents = ARRAY_SIZE(gcc_parent_data_4),
++		.flags = CLK_SET_RATE_PARENT,
++		.ops = &clk_rcg2_shared_ops,
++	},
++};
++
++static struct clk_branch gcc_usb3_prim_phy_aux_clk = {
++	.halt_reg = 0x39060,
++	.halt_check = BRANCH_HALT,
++	.clkr = {
++		.enable_reg = 0x39060,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_usb3_prim_phy_aux_clk",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_usb3_prim_phy_aux_clk_src.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_usb3_prim_phy_com_aux_clk = {
++	.halt_reg = 0x39064,
++	.halt_check = BRANCH_HALT,
++	.clkr = {
++		.enable_reg = 0x39064,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_usb3_prim_phy_com_aux_clk",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_usb3_prim_phy_aux_clk_src.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_usb3_prim_phy_pipe_clk = {
++	.halt_reg = 0x39068,
++	.halt_check = BRANCH_HALT_DELAY,
++	.hwcg_reg = 0x39068,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x39068,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_usb3_prim_phy_pipe_clk",
++			.parent_hws = (const struct clk_hw*[]) {
++				&gcc_usb3_prim_phy_pipe_clk_src.clkr.hw,
++			},
++			.num_parents = 1,
++			.flags = CLK_SET_RATE_PARENT,
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct gdsc usb3_phy_gdsc = {
++	.gdscr = 0x50018,
++	.pd = {
++		.name = "usb3_phy_gdsc",
++	},
++	.pwrsts = PWRSTS_RET_ON,
++	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
++};
++
+ static struct gdsc ufs_phy_gdsc = {
+ 	.gdscr = 0x77004,
+ 	.pd = {
+@@ -1311,6 +1418,11 @@ static struct clk_regmap *gcc_sm8635_clocks[] = {
+ 	[GCC_USB30_PRIM_MOCK_UTMI_CLK_SRC] = &gcc_usb30_prim_mock_utmi_clk_src.clkr,
+ 	[GCC_USB30_PRIM_MOCK_UTMI_POSTDIV_CLK_SRC] = &gcc_usb30_prim_mock_utmi_postdiv_clk_src.clkr,
+ 	[GCC_USB30_PRIM_SLEEP_CLK] = &gcc_usb30_prim_sleep_clk.clkr,
++	[GCC_USB3_PRIM_PHY_AUX_CLK] = &gcc_usb3_prim_phy_aux_clk.clkr,
++	[GCC_USB3_PRIM_PHY_AUX_CLK_SRC] = &gcc_usb3_prim_phy_aux_clk_src.clkr,
++	[GCC_USB3_PRIM_PHY_COM_AUX_CLK] = &gcc_usb3_prim_phy_com_aux_clk.clkr,
++	[GCC_USB3_PRIM_PHY_PIPE_CLK] = &gcc_usb3_prim_phy_pipe_clk.clkr,
++	[GCC_USB3_PRIM_PHY_PIPE_CLK_SRC] = &gcc_usb3_prim_phy_pipe_clk_src.clkr,
+ 	[GCC_AGGRE_UFS_PHY_AXI_CLK] = &gcc_aggre_ufs_phy_axi_clk.clkr,
+ 	[GCC_UFS_PHY_AHB_CLK] = &gcc_ufs_phy_ahb_clk.clkr,
+ 	[GCC_UFS_PHY_AXI_CLK] = &gcc_ufs_phy_axi_clk.clkr,
+@@ -1349,6 +1461,7 @@ static struct gdsc *gcc_sm8635_gdscs[] = {
+ 	[PCIE_0_GDSC] = &pcie_0_gdsc,
+ 	[PCIE_0_PHY_GDSC] = &pcie_0_phy_gdsc,
+ 	[USB30_PRIM_GDSC] = &usb30_prim_gdsc,
++	[USB3_PHY_GDSC] = &usb3_phy_gdsc,
+ 	[UFS_PHY_GDSC] = &ufs_phy_gdsc,
+ 	[UFS_MEM_PHY_GDSC] = &ufs_mem_phy_gdsc,
+ };
+@@ -1362,6 +1475,8 @@ static const struct qcom_reset_map gcc_sm8635_resets[] = {
+ 	[GCC_QUSB2PHY_PRIM_BCR] = { 0x12000 },
+ 	[GCC_UFS_PHY_BCR] = { 0x77000 },
+ 	[GCC_USB30_PRIM_BCR] = { 0x39000 },
++	[GCC_USB3_DP_PHY_PRIM_BCR] = { 0x50008 },
++	[GCC_USB3_PHY_PRIM_BCR] = { 0x50000 },
+ };
+ 
+ static const struct regmap_config gcc_sm8635_regmap_config = {
+-- 
+2.54.0 (Apple Git-157)
+
