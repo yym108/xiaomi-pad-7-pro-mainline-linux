@@ -26,6 +26,7 @@ state_lock = threading.Lock()
 state = {
     "attached": False,
     "charging": False,
+    "charge_done": False,
     "pen_soc": -1,
     "tx_vout": 0,
     "tx_iout": 0,
@@ -35,6 +36,8 @@ state = {
     "reverse_chg_mode": 0,
     "mode": "auto",  # "auto" | "on" | "off"
 }
+session_triggered = False
+full_since = 0.0
 
 
 def read_int(name: str, default: int = 0) -> int:
@@ -77,15 +80,61 @@ def notify_kde(title: str, body: str, icon: str = "battery-charging") -> None:
         pass
 
 
-def apply_mode_locked() -> None:
+def apply_mode_locked(force_retrigger: bool = False) -> None:
+    global session_triggered, full_since
     mode = state["mode"]
     attached = state["attached"]
     place_err = state["place_err"]
-    want_tx = 1 if (mode == "on" or (mode == "auto" and attached and place_err == 0)) else 0
-    if state["reverse_chg_mode"] != want_tx:
-        write_int("reverse_chg_mode", want_tx)
-        state["reverse_chg_mode"] = want_tx
-        print(f"[pen-charger] set reverse_chg_mode={want_tx} (mode={mode}, attached={attached})", flush=True)
+    chg_mode = state["reverse_chg_mode"]
+    pen_soc = state["pen_soc"]
+
+    if force_retrigger:
+        session_triggered = False
+        state["charge_done"] = False
+        full_since = 0.0
+
+    # Off, detached, or misaligned: always turn TX off and reset session
+    if mode == "off" or (mode == "auto" and (not attached or place_err != 0)):
+        session_triggered = False
+        state["charge_done"] = False
+        full_since = 0.0
+        if chg_mode != 0:
+            write_int("reverse_chg_mode", 0)
+            state["reverse_chg_mode"] = 0
+            print(f"[pen-charger] set reverse_chg_mode=0 (mode={mode}, attached={attached}, place_err={place_err})", flush=True)
+        return
+
+    # Edge-triggered start: only enable reverse_chg_mode ONCE per attach/manual session.
+    # If ADSP/Qi TX subsequently turns reverse_chg_mode back to 0 (e.g. pen reached 100%
+    # and sent Qi EPT Charge Complete, or thermal protection), do NOT re-enable it in a loop!
+    if not session_triggered:
+        session_triggered = True
+        full_since = 0.0
+        if chg_mode != 1:
+            write_int("reverse_chg_mode", 1)
+            state["reverse_chg_mode"] = 1
+            print(f"[pen-charger] set reverse_chg_mode=1 (mode={mode}, attached={attached})", flush=True)
+        return
+
+    # Session already started: respect hardware auto-stop (ADSP dropped reverse_chg_mode -> 0)
+    if chg_mode == 0:
+        if not state["charge_done"]:
+            state["charge_done"] = True
+            print(f"[pen-charger] hardware stopped TX (pen_soc={pen_soc}%, state={state['reverse_chg_state']}); staying idle", flush=True)
+        return
+
+    # Safety cutoff in auto mode: if pen stays at 100% for >15s while TX is still on, stop TX
+    if mode == "auto" and pen_soc >= 100:
+        now = time.monotonic()
+        if full_since == 0.0:
+            full_since = now
+        elif now - full_since >= 15.0:
+            write_int("reverse_chg_mode", 0)
+            state["reverse_chg_mode"] = 0
+            state["charge_done"] = True
+            print("[pen-charger] pen_soc=100% cutoff -> set reverse_chg_mode=0", flush=True)
+    else:
+        full_since = 0.0
 
 
 def poll_loop() -> None:
@@ -171,7 +220,7 @@ class Handler(BaseHTTPRequestHandler):
             if v in ("auto", "on", "off"):
                 with state_lock:
                     state["mode"] = v
-                    apply_mode_locked()
+                    apply_mode_locked(force_retrigger=True)
                     snap = dict(state)
                 self._send_json(snap)
                 return

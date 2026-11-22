@@ -72,8 +72,10 @@ PlasmoidItem {
         var soc = penSoc >= 0 ? (penSoc + "%") : "--";
         if (attached && reverseChgMode === 1)
             return "磁吸无线充电中 · " + soc + " (" + (powerMw / 1000).toFixed(2) + "W)";
+        if (attached && penSoc >= 100)
+            return "已磁吸（已充满）· 100%";
         if (attached)
-            return "已磁吸（充电暂停）· " + soc;
+            return "已磁吸（待机/已暂停）· " + soc;
         return "已取下 · 上次电量 " + soc;
     }
 
@@ -139,7 +141,8 @@ PlasmoidItem {
                             if (!root.online) return "服务离线";
                             if (root.placeErr !== 0) return "⚠️ 磁吸摆放偏移";
                             if (root.attached && root.reverseChgMode === 1) return "⚡ 磁吸无线充电中";
-                            if (root.attached) return "🧲 已磁吸（已暂停充电）";
+                            if (root.attached && root.penSoc >= 100) return "✅ 已磁吸（已充满待机）";
+                            if (root.attached) return "🧲 已磁吸（待机/已暂停）";
                             return "✏️ 已取下使用中";
                         }
                     }
