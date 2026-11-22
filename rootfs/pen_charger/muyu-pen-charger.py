@@ -176,15 +176,10 @@ def poll_loop() -> None:
         except Exception:
             pass
 
-        # Notifications on attach/detach transitions
+        # Attach/detach state transitions (status reflected via Plasmoid icon; no desktop popup)
         if prev_attached is not None and attached != prev_attached:
             if attached:
                 notified_soc = False
-                soc_txt = f"当前电量 {snap['pen_soc']}%" if snap["pen_soc"] >= 0 else "正在握手读取电量..."
-                notify_kde("焦点触控笔已磁吸", f"已自动开启无线充电 · {soc_txt}", "battery-charging")
-            else:
-                soc_txt = f"电量 {snap['pen_soc']}%" if snap["pen_soc"] >= 0 else "已停止无线充电"
-                notify_kde("焦点触控笔已取下", soc_txt, "draw-freehand")
         elif attached and not notified_soc and 0 <= raw_soc <= 100 and prev_attached is True:
             notified_soc = True
 
