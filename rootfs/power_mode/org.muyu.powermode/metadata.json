@@ -1,0 +1,18 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "muyu"
+            }
+        ],
+        "Category": "System Information",
+        "Description": "Xiaomi Pad 7 Pro (SM8635) Hardware Power & Performance Mode Controller",
+        "Icon": "speedometer",
+        "Id": "org.muyu.powermode",
+        "License": "GPL-2.0+",
+        "Name": "硬件功耗模式",
+        "Version": "1.0"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0"
+}
