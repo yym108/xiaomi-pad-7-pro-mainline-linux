@@ -27,7 +27,7 @@ STATE_FILE = STATE_DIR / "mode"
 
 CPU_BASE = Path("/sys/devices/system/cpu/cpufreq")
 GPU_BASE = Path("/sys/class/devfreq/3d00000.gpu")
-BAT_TEMP = Path("/sys/class/power_supply/qcom-battmgr-bat/temp")
+BAT_BASE = Path("/sys/class/power_supply/qcom-battmgr-bat")
 CPU_THERMAL_ZONES = [
     Path("/sys/class/thermal/thermal_zone0/temp"),
     Path("/sys/class/thermal/thermal_zone1/temp"),
@@ -67,6 +67,58 @@ PROFILES = {
 MODE_ORDER = ["save", "balance", "perf"]
 lock = threading.Lock()
 current_mode = "balance"
+_prev_cpu_total = 0
+_prev_cpu_idle = 0
+
+
+def read_cpu_usage_pct() -> int:
+    global _prev_cpu_total, _prev_cpu_idle
+    try:
+        parts = Path("/proc/stat").read_text().splitlines()[0].split()[1:]
+        vals = [int(x) for x in parts[:8]]
+        idle = vals[3] + vals[4]
+        total = sum(vals)
+        if _prev_cpu_total == 0:
+            _prev_cpu_total, _prev_cpu_idle = total, idle
+            return 0
+        dt = total - _prev_cpu_total
+        di = idle - _prev_cpu_idle
+        _prev_cpu_total, _prev_cpu_idle = total, idle
+        if dt <= 0:
+            return 0
+        return max(0, min(100, int(round((dt - di) * 100.0 / dt))))
+    except Exception:
+        return 0
+
+
+def read_mem_gb() -> tuple[float, float]:
+    try:
+        info = {}
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if ":" in line:
+                k, v = line.split(":", 1)
+                info[k] = int(v.strip().split()[0])
+        total_kb = info.get("MemTotal", 0)
+        avail_kb = info.get("MemAvailable", 0)
+        used_kb = max(0, total_kb - avail_kb)
+        return round(used_kb / 1048576.0, 1), round(total_kb / 1048576.0, 1)
+    except Exception:
+        return 0.0, 0.0
+
+
+def read_battery_power() -> tuple[str, float, float]:
+    status = "Unknown"
+    try:
+        status = (BAT_BASE / "status").read_text().strip()
+    except Exception:
+        pass
+    uv = read_int(BAT_BASE / "voltage_now", 0)
+    ua = read_int(BAT_BASE / "current_now", 0)
+    watts = round(abs(uv * ua) / 1e12, 1)
+    if status == "Discharging":
+        watts = -watts
+    bat_temp = round(read_int(BAT_BASE / "temp", 0) / 10.0, 1) if (BAT_BASE / "temp").exists() else 0.0
+    return status, watts, bat_temp
 
 
 def read_int(path: Path, default: int = 0) -> int:
@@ -146,7 +198,9 @@ def get_status_locked() -> dict:
     gcur = read_int(GPU_BASE / "cur_freq") // 1000000
     temps = [read_int(z) for z in CPU_THERMAL_ZONES if z.exists()]
     cpu_temp = round(max(temps) / 1000.0, 1) if temps else 0.0
-    bat_temp = round(read_int(BAT_TEMP) / 10.0, 1) if BAT_TEMP.exists() else 0.0
+    bat_status, bat_watts, bat_temp = read_battery_power()
+    cpu_pct = read_cpu_usage_pct()
+    mem_used_gb, mem_total_gb = read_mem_gb()
     return {
         "mode": current_mode,
         "label": PROFILES[current_mode]["label"],
@@ -157,6 +211,11 @@ def get_status_locked() -> dict:
         "gpu_cur_mhz": gcur,
         "cpu_temp_c": cpu_temp,
         "bat_temp_c": bat_temp,
+        "bat_status": bat_status,
+        "bat_watts": bat_watts,
+        "cpu_pct": cpu_pct,
+        "mem_used_gb": mem_used_gb,
+        "mem_total_gb": mem_total_gb,
     }
 
 

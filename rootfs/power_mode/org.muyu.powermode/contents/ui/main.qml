@@ -9,13 +9,13 @@ PlasmoidItem {
 
     property string mode: "balance"
     property string label: "均衡模式"
-    property int cpu0Max: 2016
-    property int cpu3Max: 2572
-    property int cpu7Max: 2668
-    property int gpuMax: 950
-    property int gpuCur: 255
     property real cpuTemp: 0.0
     property real batTemp: 0.0
+    property string batStatus: "Unknown"
+    property real batWatts: 0.0
+    property int cpuPct: 0
+    property real memUsedGb: 0.0
+    property real memTotalGb: 0.0
     property bool online: false
 
     function fetchStatus() {
@@ -27,13 +27,13 @@ PlasmoidItem {
                         var d = JSON.parse(xhr.responseText);
                         root.mode = d.mode || "balance";
                         root.label = d.label || "均衡模式";
-                        root.cpu0Max = d.cpu0_max_mhz || 0;
-                        root.cpu3Max = d.cpu3_max_mhz || 0;
-                        root.cpu7Max = d.cpu7_max_mhz || 0;
-                        root.gpuMax = d.gpu_max_mhz || 0;
-                        root.gpuCur = d.gpu_cur_mhz || 0;
                         root.cpuTemp = d.cpu_temp_c || 0.0;
                         root.batTemp = d.bat_temp_c || 0.0;
+                        root.batStatus = d.bat_status || "Unknown";
+                        root.batWatts = d.bat_watts || 0.0;
+                        root.cpuPct = d.cpu_pct || 0;
+                        root.memUsedGb = d.mem_used_gb || 0.0;
+                        root.memTotalGb = d.mem_total_gb || 0.0;
                         root.online = true;
                     } catch (e) {}
                 } else {
@@ -68,18 +68,31 @@ PlasmoidItem {
         return "均衡";
     }
 
+    function powerTitle() {
+        if (batStatus === "Charging") return "充电功率";
+        if (batStatus === "Full") return "已充满";
+        return "实时功耗";
+    }
+
+    function powerValue() {
+        var w = Math.abs(batWatts).toFixed(1) + " W";
+        if (batStatus === "Charging") return "+" + w;
+        if (batStatus === "Discharging") return "-" + w;
+        return w;
+    }
+
     Timer {
-        interval: 3000
+        interval: 2000
         running: true
         repeat: true
         triggeredOnStart: true
         onTriggered: root.fetchStatus()
     }
 
-    toolTipMainText: "SM8635 硬件功耗模式 · " + root.label
+    toolTipMainText: "硬件功耗模式 · " + root.label
     toolTipSubText: {
         if (!online) return "功耗控制服务未运行";
-        return "CPU " + (cpu0Max / 1000).toFixed(2) + "/" + (cpu3Max / 1000).toFixed(2) + "/" + (cpu7Max / 1000).toFixed(2) + " GHz · GPU " + gpuMax + " MHz · SoC " + cpuTemp.toFixed(1) + "°C";
+        return powerTitle() + " " + powerValue() + " · CPU " + cpuPct + "% · 内存 " + memUsedGb.toFixed(1) + "/" + memTotalGb.toFixed(1) + " GB · SoC " + cpuTemp.toFixed(1) + "°C";
     }
 
     compactRepresentation: MouseArea {
@@ -133,12 +146,12 @@ PlasmoidItem {
                     PlasmaComponents.Label {
                         opacity: 0.75
                         font.pixelSize: Kirigami.Theme.smallFont.pixelSize
-                        text: root.online ? ("当前：" + root.label) : "服务离线"
+                        text: root.online ? ("当前：" + root.label + " · 电池 " + root.batTemp.toFixed(1) + "°C") : "服务离线"
                     }
                 }
                 Item { Layout.fillWidth: true }
                 PlasmaComponents.Label {
-                    text: root.cpuTemp.toFixed(1) + "°C"
+                    text: "SoC " + root.cpuTemp.toFixed(1) + "°C"
                     font.bold: true
                 }
             }
@@ -149,22 +162,20 @@ PlasmoidItem {
                 columnSpacing: Kirigami.Units.smallSpacing
 
                 PlasmaComponents.Label {
-                    text: "CPU 上限\n" + (root.cpu0Max / 1000).toFixed(2) + "/" + (root.cpu3Max / 1000).toFixed(2) + "/" + (root.cpu7Max / 1000).toFixed(2) + " GHz"
+                    text: root.powerTitle() + "\n" + root.powerValue()
                     horizontalAlignment: Text.AlignHCenter
                     Layout.fillWidth: true
-                    font.pixelSize: Kirigami.Theme.smallFont.pixelSize
+                    font.bold: true
                 }
                 PlasmaComponents.Label {
-                    text: "GPU 上限\n" + root.gpuMax + " MHz"
+                    text: "CPU 负载\n" + root.cpuPct + "%"
                     horizontalAlignment: Text.AlignHCenter
                     Layout.fillWidth: true
-                    font.pixelSize: Kirigami.Theme.smallFont.pixelSize
                 }
                 PlasmaComponents.Label {
-                    text: "电池温度\n" + root.batTemp.toFixed(1) + "°C"
+                    text: "内存占用\n" + root.memUsedGb.toFixed(1) + " / " + root.memTotalGb.toFixed(1) + " GB"
                     horizontalAlignment: Text.AlignHCenter
                     Layout.fillWidth: true
-                    font.pixelSize: Kirigami.Theme.smallFont.pixelSize
                 }
             }
 
