@@ -184,6 +184,12 @@ if [ -n "$LINUX_DEV" ] && [ -b "/dev/$LINUX_DEV" ]; then
             cp -a /lib/firmware/. /mnt/newroot/lib/firmware/ 2>/dev/null || true
         fi
         if [ -x /mnt/newroot/usr/lib/systemd/systemd ] || [ -L /mnt/newroot/sbin/init ]; then
+            # Wait for built-in ath12k (WCN7850) firmware handshake (amss/m3/board-2) to finish
+            # before switch_root deletes initramfs /lib/firmware (prevents intermittent -ENOENT race)
+            for _w in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+                [ -d /sys/class/ieee80211/phy0 ] && break
+                sleep 0.1 2>/dev/null || sleep 1
+            done
             mkdir -p /mnt/newroot/proc /mnt/newroot/sys /mnt/newroot/dev /mnt/newroot/run
             mount --move /proc /mnt/newroot/proc 2>/dev/null || true
             mount --move /sys /mnt/newroot/sys 2>/dev/null || true
