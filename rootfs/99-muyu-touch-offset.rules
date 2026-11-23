@@ -1,0 +1,4 @@
+# Install to: /etc/udev/rules.d/99-muyu-touch-offset.rules
+# Xiaomi Pad 7 Pro (muyu) Novatek NT36532 Touchscreen fingertip parallax offset
+# Shifts raw capacitive centroid ~1.6mm (~21px) upward toward fingertip (stylus unaffected)
+ACTION=="add|change", SUBSYSTEM=="input", ATTRS{name}=="Novatek NT36532 Touchscreen", ENV{LIBINPUT_CALIBRATION_MATRIX}="1 0 0 0 1 -0.010"

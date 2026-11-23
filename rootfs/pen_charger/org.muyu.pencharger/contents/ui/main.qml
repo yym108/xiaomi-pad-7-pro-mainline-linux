@@ -17,7 +17,11 @@ PlasmoidItem {
     property int placeErr: 0
     property int reverseChgMode: 0
     property string chargeMode: "auto"
+    property bool openedByTouch: false
+    property bool mouseHovered: false
     property bool online: false
+
+    readonly property bool largeUi: openedByTouch || Kirigami.Settings.tabletMode
 
     function fetchStatus() {
         var xhr = new XMLHttpRequest();
@@ -65,8 +69,10 @@ PlasmoidItem {
         onTriggered: root.fetchStatus()
     }
 
-    toolTipMainText: "小米焦点触控笔"
+    // Only show tooltip on real mouse/touchpad hover (prevents stuck tooltip after finger tap)
+    toolTipMainText: root.mouseHovered ? "小米焦点触控笔" : ""
     toolTipSubText: {
+        if (!root.mouseHovered) return "";
         if (!online) return "磁吸充电服务未运行";
         if (placeErr !== 0) return "摆放偏移，请重新对齐";
         var soc = penSoc >= 0 ? (penSoc + "%") : "--";
@@ -79,11 +85,24 @@ PlasmoidItem {
         return "已取下 · 上次电量 " + soc;
     }
 
-    compactRepresentation: MouseArea {
-        id: compactRoot
+    compactRepresentation: Item {
         Layout.minimumWidth: row.implicitWidth + Kirigami.Units.smallSpacing * 2
         Layout.preferredWidth: Layout.minimumWidth
-        onClicked: root.expanded = !root.expanded
+
+        HoverHandler {
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+            onHoveredChanged: root.mouseHovered = hovered
+        }
+
+        TapHandler {
+            onTapped: function(eventPoint, button) {
+                root.openedByTouch = (point.device.type === PointerDevice.TouchScreen);
+                if (root.openedByTouch) {
+                    root.mouseHovered = false;
+                }
+                root.expanded = !root.expanded;
+            }
+        }
 
         RowLayout {
             id: row
@@ -111,15 +130,15 @@ PlasmoidItem {
     }
 
     fullRepresentation: Item {
-        Layout.minimumWidth: Kirigami.Units.gridUnit * 16
-        Layout.minimumHeight: Kirigami.Units.gridUnit * 13
-        Layout.preferredWidth: Kirigami.Units.gridUnit * 17
-        Layout.preferredHeight: Kirigami.Units.gridUnit * 13
+        Layout.minimumWidth: Kirigami.Units.gridUnit * (root.largeUi ? 19 : 16)
+        Layout.minimumHeight: Kirigami.Units.gridUnit * (root.largeUi ? 15 : 13)
+        Layout.preferredWidth: Layout.minimumWidth
+        Layout.preferredHeight: Layout.minimumHeight
 
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: Kirigami.Units.largeSpacing
-            spacing: Kirigami.Units.mediumSpacing
+            spacing: root.largeUi ? Kirigami.Units.largeSpacing : Kirigami.Units.mediumSpacing
 
             RowLayout {
                 Layout.fillWidth: true
@@ -185,13 +204,14 @@ PlasmoidItem {
 
             RowLayout {
                 Layout.fillWidth: true
-                spacing: Kirigami.Units.smallSpacing
+                spacing: root.largeUi ? Kirigami.Units.mediumSpacing : Kirigami.Units.smallSpacing
 
                 PlasmaComponents.Button {
                     text: "自动磁吸"
                     checkable: true
                     checked: root.chargeMode === "auto"
                     Layout.fillWidth: true
+                    implicitHeight: root.largeUi ? 48 : 34
                     onClicked: root.setMode("auto")
                 }
                 PlasmaComponents.Button {
@@ -199,6 +219,7 @@ PlasmoidItem {
                     checkable: true
                     checked: root.chargeMode === "on"
                     Layout.fillWidth: true
+                    implicitHeight: root.largeUi ? 48 : 34
                     onClicked: root.setMode("on")
                 }
                 PlasmaComponents.Button {
@@ -206,6 +227,7 @@ PlasmoidItem {
                     checkable: true
                     checked: root.chargeMode === "off"
                     Layout.fillWidth: true
+                    implicitHeight: root.largeUi ? 48 : 34
                     onClicked: root.setMode("off")
                 }
             }

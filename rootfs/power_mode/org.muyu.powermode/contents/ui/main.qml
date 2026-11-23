@@ -16,7 +16,13 @@ PlasmoidItem {
     property int cpuPct: 0
     property real memUsedGb: 0.0
     property real memTotalGb: 0.0
+    property bool touchMode: false
+    property bool touchAuto: true
+    property bool openedByTouch: false
+    property bool mouseHovered: false
     property bool online: false
+
+    readonly property bool largeUi: openedByTouch || touchMode || Kirigami.Settings.tabletMode
 
     function fetchStatus() {
         var xhr = new XMLHttpRequest();
@@ -34,6 +40,8 @@ PlasmoidItem {
                         root.cpuPct = d.cpu_pct || 0;
                         root.memUsedGb = d.mem_used_gb || 0.0;
                         root.memTotalGb = d.mem_total_gb || 0.0;
+                        root.touchMode = !!d.touch_mode;
+                        root.touchAuto = !!d.touch_auto;
                         root.online = true;
                     } catch (e) {}
                 } else {
@@ -45,16 +53,20 @@ PlasmoidItem {
         xhr.send();
     }
 
-    function setMode(m) {
+    function sendApi(path) {
         var xhr = new XMLHttpRequest();
         xhr.onreadystatechange = function() {
             if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
                 fetchStatus();
             }
         };
-        xhr.open("GET", "http://127.0.0.1:18732/mode?v=" + m);
+        xhr.open("GET", "http://127.0.0.1:18732" + path);
         xhr.send();
     }
+
+    function setMode(m) { sendApi("/mode?v=" + m); }
+    function setTouchMode(on) { sendApi("/touch?v=" + (on ? "on" : "off")); }
+    function setTouchAuto(on) { sendApi("/touch_auto?v=" + (on ? "on" : "off")); }
 
     function modeIcon(m) {
         if (m === "save") return "battery-profile-powersave";
@@ -89,16 +101,32 @@ PlasmoidItem {
         onTriggered: root.fetchStatus()
     }
 
-    toolTipMainText: "硬件功耗模式 · " + root.label
+    // Only show tooltip on real mouse/touchpad hover (prevents stuck tooltip after finger tap)
+    toolTipMainText: root.mouseHovered ? ("硬件功耗模式 · " + root.label) : ""
     toolTipSubText: {
+        if (!root.mouseHovered) return "";
         if (!online) return "功耗控制服务未运行";
         return powerTitle() + " " + powerValue() + " · CPU " + cpuPct + "% · 内存 " + memUsedGb.toFixed(1) + "/" + memTotalGb.toFixed(1) + " GB · SoC " + cpuTemp.toFixed(1) + "°C";
     }
 
-    compactRepresentation: MouseArea {
+    compactRepresentation: Item {
         Layout.minimumWidth: row.implicitWidth + Kirigami.Units.smallSpacing * 2
         Layout.preferredWidth: Layout.minimumWidth
-        onClicked: root.expanded = !root.expanded
+
+        HoverHandler {
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+            onHoveredChanged: root.mouseHovered = hovered
+        }
+
+        TapHandler {
+            onTapped: function(eventPoint, button) {
+                root.openedByTouch = (point.device.type === PointerDevice.TouchScreen);
+                if (root.openedByTouch) {
+                    root.mouseHovered = false;
+                }
+                root.expanded = !root.expanded;
+            }
+        }
 
         RowLayout {
             id: row
@@ -120,15 +148,15 @@ PlasmoidItem {
     }
 
     fullRepresentation: Item {
-        Layout.minimumWidth: Kirigami.Units.gridUnit * 17
-        Layout.minimumHeight: Kirigami.Units.gridUnit * 12
-        Layout.preferredWidth: Kirigami.Units.gridUnit * 18
-        Layout.preferredHeight: Kirigami.Units.gridUnit * 12
+        Layout.minimumWidth: Kirigami.Units.gridUnit * (root.largeUi ? 20 : 17)
+        Layout.minimumHeight: Kirigami.Units.gridUnit * (root.largeUi ? 19 : 16)
+        Layout.preferredWidth: Layout.minimumWidth
+        Layout.preferredHeight: Layout.minimumHeight
 
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: Kirigami.Units.largeSpacing
-            spacing: Kirigami.Units.mediumSpacing
+            spacing: root.largeUi ? Kirigami.Units.largeSpacing : Kirigami.Units.mediumSpacing
 
             RowLayout {
                 Layout.fillWidth: true
@@ -141,7 +169,7 @@ PlasmoidItem {
                     spacing: 2
                     Kirigami.Heading {
                         level: 4
-                        text: "硬件功耗模式"
+                        text: "硬件功耗与触控"
                     }
                     PlasmaComponents.Label {
                         opacity: 0.75
@@ -181,13 +209,14 @@ PlasmoidItem {
 
             RowLayout {
                 Layout.fillWidth: true
-                spacing: Kirigami.Units.smallSpacing
+                spacing: root.largeUi ? Kirigami.Units.mediumSpacing : Kirigami.Units.smallSpacing
 
                 PlasmaComponents.Button {
                     text: "🔋 省电"
                     checkable: true
                     checked: root.mode === "save"
                     Layout.fillWidth: true
+                    implicitHeight: root.largeUi ? 48 : 34
                     onClicked: root.setMode("save")
                 }
                 PlasmaComponents.Button {
@@ -195,6 +224,7 @@ PlasmoidItem {
                     checkable: true
                     checked: root.mode === "balance"
                     Layout.fillWidth: true
+                    implicitHeight: root.largeUi ? 48 : 34
                     onClicked: root.setMode("balance")
                 }
                 PlasmaComponents.Button {
@@ -202,7 +232,36 @@ PlasmoidItem {
                     checkable: true
                     checked: root.mode === "perf"
                     Layout.fillWidth: true
+                    implicitHeight: root.largeUi ? 48 : 34
                     onClicked: root.setMode("perf")
+                }
+            }
+
+            Kirigami.Separator {
+                Layout.fillWidth: true
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                PlasmaComponents.Label {
+                    text: "👆 触控大按键模式"
+                    Layout.fillWidth: true
+                }
+                PlasmaComponents.Switch {
+                    checked: root.touchMode
+                    onToggled: root.setTouchMode(checked)
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                PlasmaComponents.Label {
+                    text: "🔄 触控/键鼠自动切换"
+                    Layout.fillWidth: true
+                }
+                PlasmaComponents.Switch {
+                    checked: root.touchAuto
+                    onToggled: root.setTouchAuto(checked)
                 }
             }
         }
