@@ -68,7 +68,8 @@
 - [ ] **Internal Microphone Recording**: Wire up AudioReach VA Macro DMIC topology and ALSA UCM2 capture profile.
 - [ ] **Sensors (Auto-Rotation & Auto-Brightness)**: Bring up SSC accelerometer and ALS via `hexagonrpcd` + `iio-sensor-proxy`.
 - [ ] **USB-C Host / Gadget Quick Toggle**: Add a one-click desktop toggle between USB Host (docks/drives/peripherals) and USB-NCM debug networking.
-- [ ] **Deep Sleep Overnight Tuning**: Measure overnight `mem` standby drain and clean up the UFS `hibern8 exit failed` resume warning.
+- [ ] **Stock Charger Fast-Charging Benchmark**: Measure real-world charging protocol negotiation and peak wattage with the stock Xiaomi 67W charger under Linux.
+- [ ] **Deep Sleep Overnight Tuning**: Verified ~10% battery drain over 9h screen-off in power-save mode; continue cleaning up the UFS `hibern8 exit failed` resume warning.
 - [ ] **Tablet Mode (Folded Keyboard Disable)**: Hook up the rear hall sensor to disable keyboard/touchpad input when folded 360° behind the tablet.
 - [ ] **Long-Term Stability Testing**: Extended soak testing under load, repeated suspend/resume cycles, and external DisplayPort monitors.
 - [ ] **Cameras / Fingerprint**: Evaluate bring-up as mainline support matures.
