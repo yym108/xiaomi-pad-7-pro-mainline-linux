@@ -1,0 +1,269 @@
+From cc253656ff55cc59ff5f8f29ef32029f0266ae0b Mon Sep 17 00:00:00 2001
+From: yym108 <183073514+yym108@users.noreply.github.com>
+Date: Mon, 23 Nov 2026 13:53:24 +0800
+Subject: [PATCH] power: supply: qcom_battmgr: fix current_now sign and add
+ Xiaomi PD fast-charge OEM controls
+
+---
+ drivers/power/supply/qcom_battmgr.c | 203 +++++++++++++++++++++++++++-
+ 1 file changed, 202 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/power/supply/qcom_battmgr.c b/drivers/power/supply/qcom_battmgr.c
+index bc5b81543..b342e9854 100644
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -102,6 +102,12 @@ enum qcom_battmgr_variant {
+ #define BATTMGR_XM_PROPERTY_GET		0x50
+ #define BATTMGR_XM_PROPERTY_SET		0x51
+ 
++#define XM_PROP_AUTHENTIC		0x04
++#define XM_PROP_VERIFY_PROCESS		0x13
++#define XM_PROP_PD_VERIFED		0x1f
++#define XM_PROP_INPUT_SUSPEND		0x35
++#define XM_PROP_FASTCHG_MODE		0x36
++#define XM_PROP_APDO_MAX		0x3c
+ #define XM_PROP_REVERSE_CHG_MODE	0x47
+ #define XM_PROP_REVERSE_CHG_STATE	0x48
+ #define XM_PROP_TX_IOUT			0x61
+@@ -110,6 +116,7 @@ enum qcom_battmgr_variant {
+ #define XM_PROP_PEN_HALL3		0x64
+ #define XM_PROP_PEN_HALL4		0x65
+ #define XM_PROP_PEN_PLACE_ERR		0x6b
++#define XM_PROP_SLAVE_AUTHENTIC		0xce
+ #define CHARGE_CTRL_START_THR_MIN	50
+ #define CHARGE_CTRL_START_THR_MAX	95
+ #define CHARGE_CTRL_END_THR_MIN		55
+@@ -1473,7 +1480,7 @@ static void qcom_battmgr_sm8350_callback(struct qcom_battmgr *battmgr,
+ 			battmgr->info.voltage_max = le32_to_cpu(resp->intval.value);
+ 			break;
+ 		case BATT_CURR_NOW:
+-			battmgr->status.current_now = le32_to_cpu(resp->intval.value);
++			battmgr->status.current_now = -(s32)le32_to_cpu(resp->intval.value);
+ 			break;
+ 		case BATT_TEMP:
+ 			val = le32_to_cpu(resp->intval.value);
+@@ -1515,6 +1522,9 @@ static void qcom_battmgr_sm8350_callback(struct qcom_battmgr *battmgr,
+ 		case BATT_CHG_CTRL_END_THR:
+ 			battmgr->info.charge_ctrl_end = le32_to_cpu(resp->intval.value);
+ 			break;
++		case BATT_CHG_CTRL_LIM:
++			battmgr->xm_prop_val = le32_to_cpu(resp->intval.value);
++			break;
+ 		default:
+ 			dev_warn(battmgr->dev, "unknown property %#x\n", property);
+ 			break;
+@@ -1612,6 +1622,8 @@ static void qcom_battmgr_sm8350_callback(struct qcom_battmgr *battmgr,
+ 			battmgr->error = 0;
+ 		}
+ 		break;
++	case BATTMGR_BAT_PROPERTY_SET:
++	case BATTMGR_USB_PROPERTY_SET:
+ 	case BATTMGR_XM_PROPERTY_SET:
+ 	case BATTMGR_WLS_PROPERTY_SET:
+ 		if (payload_len == sizeof(resp->intval))
+@@ -1733,6 +1745,188 @@ XM_PEN_RO_ATTR(reverse_chg_state, XM_PROP_REVERSE_CHG_STATE);
+ XM_PEN_RO_ATTR(pen_hall3, XM_PROP_PEN_HALL3);
+ XM_PEN_RO_ATTR(pen_hall4, XM_PROP_PEN_HALL4);
+ XM_PEN_RO_ATTR(pen_place_err, XM_PROP_PEN_PLACE_ERR);
++XM_PEN_RO_ATTR(fastchg_mode, XM_PROP_FASTCHG_MODE);
++XM_PEN_RO_ATTR(apdo_max, XM_PROP_APDO_MAX);
++
++static ssize_t battery_auth_show(struct device *dev,
++				 struct device_attribute *attr, char *buf)
++{
++	struct qcom_battmgr *battmgr = dev_get_drvdata(dev);
++	u32 val = 0;
++	int ret = qcom_battmgr_xm_get_prop(battmgr, XM_PROP_AUTHENTIC, &val);
++
++	if (ret)
++		return ret;
++	return sysfs_emit(buf, "%d\n", (s32)val);
++}
++
++static ssize_t battery_auth_store(struct device *dev,
++				  struct device_attribute *attr,
++				  const char *buf, size_t count)
++{
++	struct qcom_battmgr *battmgr = dev_get_drvdata(dev);
++	int val, ret;
++
++	ret = kstrtoint(buf, 10, &val);
++	if (ret)
++		return ret;
++
++	ret = qcom_battmgr_xm_set_prop(battmgr, XM_PROP_AUTHENTIC, (u32)val);
++	if (ret)
++		return ret;
++	/* Also authenticate slave fuel gauge on dual-cell Pad 7 Pro */
++	qcom_battmgr_xm_set_prop(battmgr, XM_PROP_SLAVE_AUTHENTIC, (u32)val);
++	return count;
++}
++static DEVICE_ATTR_RW(battery_auth);
++
++static ssize_t pd_verified_show(struct device *dev,
++				struct device_attribute *attr, char *buf)
++{
++	struct qcom_battmgr *battmgr = dev_get_drvdata(dev);
++	u32 val = 0;
++	int ret = qcom_battmgr_xm_get_prop(battmgr, XM_PROP_PD_VERIFED, &val);
++
++	if (ret)
++		return ret;
++	return sysfs_emit(buf, "%d\n", (s32)val);
++}
++
++static ssize_t pd_verified_store(struct device *dev,
++				 struct device_attribute *attr,
++				 const char *buf, size_t count)
++{
++	struct qcom_battmgr *battmgr = dev_get_drvdata(dev);
++	int val, ret;
++
++	ret = kstrtoint(buf, 10, &val);
++	if (ret)
++		return ret;
++
++	ret = qcom_battmgr_xm_set_prop(battmgr, XM_PROP_PD_VERIFED, (u32)val);
++	return ret ? ret : count;
++}
++static DEVICE_ATTR_RW(pd_verified);
++
++static ssize_t thermal_level_show(struct device *dev,
++				  struct device_attribute *attr, char *buf)
++{
++	struct qcom_battmgr *battmgr = dev_get_drvdata(dev);
++	int ret;
++	u32 val;
++
++	if (!battmgr->service_up)
++		return -EAGAIN;
++
++	mutex_lock(&battmgr->lock);
++	ret = qcom_battmgr_request_property(battmgr, BATTMGR_BAT_PROPERTY_GET,
++					    BATT_CHG_CTRL_LIM, 0);
++	val = battmgr->xm_prop_val;
++	mutex_unlock(&battmgr->lock);
++
++	if (ret)
++		return ret;
++	return sysfs_emit(buf, "%u\n", val);
++}
++
++static ssize_t thermal_level_store(struct device *dev,
++				   struct device_attribute *attr,
++				   const char *buf, size_t count)
++{
++	struct qcom_battmgr *battmgr = dev_get_drvdata(dev);
++	unsigned int val;
++	int ret;
++
++	if (!battmgr->service_up)
++		return -EAGAIN;
++
++	ret = kstrtouint(buf, 10, &val);
++	if (ret)
++		return ret;
++	if (val > 15)
++		val = 15;
++
++	mutex_lock(&battmgr->lock);
++	ret = qcom_battmgr_request_property(battmgr, BATTMGR_BAT_PROPERTY_SET,
++					    BATT_CHG_CTRL_LIM, val);
++	mutex_unlock(&battmgr->lock);
++
++	return ret ? ret : count;
++}
++static DEVICE_ATTR_RW(thermal_level);
++
++static ssize_t usb_icl_show(struct device *dev,
++			    struct device_attribute *attr, char *buf)
++{
++	struct qcom_battmgr *battmgr = dev_get_drvdata(dev);
++	int ret;
++	u32 val;
++
++	if (!battmgr->service_up)
++		return -EAGAIN;
++
++	mutex_lock(&battmgr->lock);
++	ret = qcom_battmgr_request_property(battmgr, BATTMGR_USB_PROPERTY_GET,
++					    USB_INPUT_CURR_LIMIT, 0);
++	val = battmgr->usb.current_limit;
++	mutex_unlock(&battmgr->lock);
++
++	if (ret)
++		return ret;
++	return sysfs_emit(buf, "%u\n", val);
++}
++
++static ssize_t usb_icl_store(struct device *dev,
++			     struct device_attribute *attr,
++			     const char *buf, size_t count)
++{
++	struct qcom_battmgr *battmgr = dev_get_drvdata(dev);
++	unsigned int val;
++	int ret;
++
++	if (!battmgr->service_up)
++		return -EAGAIN;
++
++	ret = kstrtouint(buf, 10, &val);
++	if (ret)
++		return ret;
++
++	mutex_lock(&battmgr->lock);
++	ret = qcom_battmgr_request_property(battmgr, BATTMGR_USB_PROPERTY_SET,
++					    USB_INPUT_CURR_LIMIT, val);
++	mutex_unlock(&battmgr->lock);
++
++	return ret ? ret : count;
++}
++static DEVICE_ATTR_RW(usb_icl);
++
++static ssize_t input_suspend_show(struct device *dev,
++				  struct device_attribute *attr, char *buf)
++{
++	struct qcom_battmgr *battmgr = dev_get_drvdata(dev);
++	u32 val = 0;
++	int ret = qcom_battmgr_xm_get_prop(battmgr, XM_PROP_INPUT_SUSPEND, &val);
++
++	if (ret)
++		return ret;
++	return sysfs_emit(buf, "%d\n", (s32)val);
++}
++
++static ssize_t input_suspend_store(struct device *dev,
++				   struct device_attribute *attr,
++				   const char *buf, size_t count)
++{
++	struct qcom_battmgr *battmgr = dev_get_drvdata(dev);
++	int val, ret;
++
++	ret = kstrtoint(buf, 10, &val);
++	if (ret)
++		return ret;
++
++	ret = qcom_battmgr_xm_set_prop(battmgr, XM_PROP_INPUT_SUSPEND, (u32)val);
++	return ret ? ret : count;
++}
++static DEVICE_ATTR_RW(input_suspend);
+ 
+ static ssize_t reverse_chg_mode_show(struct device *dev,
+ 				     struct device_attribute *attr, char *buf)
+@@ -1771,6 +1965,13 @@ static struct attribute *qcom_battmgr_xm_pen_attrs[] = {
+ 	&dev_attr_pen_hall3.attr,
+ 	&dev_attr_pen_hall4.attr,
+ 	&dev_attr_pen_place_err.attr,
++	&dev_attr_fastchg_mode.attr,
++	&dev_attr_apdo_max.attr,
++	&dev_attr_battery_auth.attr,
++	&dev_attr_pd_verified.attr,
++	&dev_attr_thermal_level.attr,
++	&dev_attr_usb_icl.attr,
++	&dev_attr_input_suspend.attr,
+ 	NULL,
+ };
+ 
+-- 
+2.54.0 (Apple Git-157)
+

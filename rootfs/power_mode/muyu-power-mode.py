@@ -45,6 +45,8 @@ TOUCH_AUTO_FILE = STATE_DIR / "touch_auto"
 CPU_BASE = Path("/sys/devices/system/cpu/cpufreq")
 GPU_BASE = Path("/sys/class/devfreq/3d00000.gpu")
 BAT_BASE = Path("/sys/class/power_supply/qcom-battmgr-bat")
+USB_BASE = Path("/sys/class/power_supply/qcom-battmgr-usb")
+PMIC_OEM_BASE = Path("/sys/bus/auxiliary/devices/pmic_glink.power-supply.0")
 CPU_THERMAL_ZONES = [
     Path("/sys/class/thermal/thermal_zone0/temp"),
     Path("/sys/class/thermal/thermal_zone1/temp"),
@@ -541,6 +543,99 @@ def bt_watchdog_loop() -> None:
         bad_streak = 0
 
 
+def _set_input_suspend(val: int) -> bool:
+    node = PMIC_OEM_BASE / "input_suspend"
+    if node.exists():
+        return write_sysfs(node, str(val))
+    xm = PMIC_OEM_BASE / "xm_prop"
+    if xm.exists():
+        return write_sysfs(xm, f"0x35 {val}")
+    return False
+
+
+def charging_manager_loop() -> None:
+    """Unlock full USB-PD 9V/3A charging on muyu and enforce battery thermal safety.
+
+    - Authenticates stock dual-cell battery (XM_PROP_AUTHENTIC + SLAVE_AUTHENTIC)
+      so ADSP lifts the unauthenticated 1.5A/5V fallback cap.
+    - On PD hot-plug, if ADSP's initial AICL settles at 1.5A while the adapter
+      advertises >= 2.0A, pulses XM_PROP_INPUT_SUSPEND (0x35) 1 -> 0 once per
+      plug-in to trigger a clean 3.0A ICL re-settlement (~23-25W).
+    - Applies software battery thermal hysteresis via thermal_level while keeping
+      ADSP hardware JEITA protections untouched.
+    """
+    auth_node = PMIC_OEM_BASE / "battery_auth"
+    therm_node = PMIC_OEM_BASE / "thermal_level"
+    plug_seen_ts: float | None = None
+    unlocked_this_plug = False
+    last_therm_lvl: int | None = None
+
+    while True:
+        try:
+            # 1. Keep stock battery authentication active
+            if auth_node.exists():
+                try:
+                    if auth_node.read_text().strip() != "1":
+                        write_sysfs(auth_node, "1")
+                        print("[chg-mgr] Enabled battery_auth=1", flush=True)
+                except Exception:
+                    pass
+
+            # 2. One-shot PD hot-plug 1.5A ICL unlock
+            online = read_int(USB_BASE / "online", 0)
+            if online == 0:
+                plug_seen_ts = None
+                unlocked_this_plug = False
+            else:
+                now = time.monotonic()
+                if plug_seen_ts is None:
+                    plug_seen_ts = now
+                if not unlocked_this_plug and (now - plug_seen_ts) >= 3.0:
+                    try:
+                        usb_type = (USB_BASE / "usb_type").read_text().strip()
+                    except Exception:
+                        usb_type = ""
+                    imax = read_int(USB_BASE / "current_max", 0)
+                    icl = read_int(USB_BASE / "input_current_limit", 0)
+                    if icl >= 2000000:
+                        unlocked_this_plug = True
+                    elif "[PD]" in usb_type and imax >= 2000000 and 0 < icl <= 1500000:
+                        print(
+                            f"[chg-mgr] PD adapter (Imax={imax/1e6:.2f}A) capped at ICL={icl/1e6:.2f}A; "
+                            "pulsing input_suspend 1->0 to re-run AICL...",
+                            flush=True,
+                        )
+                        if _set_input_suspend(1):
+                            time.sleep(1.5)
+                            _set_input_suspend(0)
+                            time.sleep(2.5)
+                            new_icl = read_int(USB_BASE / "input_current_limit", 0)
+                            print(f"[chg-mgr] Post-pulse ICL={new_icl/1e6:.2f}A", flush=True)
+                        unlocked_this_plug = True
+
+            # 3. Battery thermal closed-loop guard (hysteresis)
+            if therm_node.exists() and online == 1:
+                temp_c = read_int(BAT_BASE / "temp", 0) / 10.0
+                target_lvl = last_therm_lvl if last_therm_lvl is not None else 0
+                if temp_c >= 43.0:
+                    target_lvl = 6
+                elif temp_c >= 41.0:
+                    target_lvl = max(target_lvl, 3)
+                elif temp_c <= 38.0:
+                    target_lvl = 0
+                if target_lvl != last_therm_lvl:
+                    if write_sysfs(therm_node, str(target_lvl)):
+                        print(
+                            f"[chg-mgr] Battery temp={temp_c:.1f}C -> thermal_level={target_lvl}",
+                            flush=True,
+                        )
+                        last_therm_lvl = target_lvl
+        except Exception:
+            pass
+
+        time.sleep(3.0)
+
+
 def main() -> None:
     if len(sys.argv) > 1:
         sys.exit(cli_main(sys.argv[1:]))
@@ -552,6 +647,7 @@ def main() -> None:
 
     threading.Thread(target=input_monitor_loop, daemon=True).start()
     threading.Thread(target=bt_watchdog_loop, daemon=True).start()
+    threading.Thread(target=charging_manager_loop, daemon=True).start()
     print(f"[power-mode] listening on http://{LISTEN_HOST}:{LISTEN_PORT}", flush=True)
     HTTPServer((LISTEN_HOST, LISTEN_PORT), Handler).serve_forever()
 

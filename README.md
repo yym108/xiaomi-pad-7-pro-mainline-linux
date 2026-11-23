@@ -56,7 +56,7 @@
 | **音频外放** | 四扬声器 AW88261 + AudioReach | ✅ 正常 | `QUINARY_MI2S_RX`，PipeWire + WirePlumber + UCM2 |
 | **USB-C / 视频输出** | QMP PHY + WCD9395 USBSS | ✅ 正常 | USB3、USB-NCM 网卡（`172.16.42.1`）、`ttyGS0` 串口、DP0 AltMode |
 | **视频硬解 / 编码** | Qualcomm Iris VPU 3.3 (2-pipe) | ✅ 正常 | V4L2 M2M + `qcom-va-driver` VA-API 零拷贝（4K60 H.264/HEVC 8&10-bit/VP9/AV1 ~135–198 FPS，1080p60 硬编 ~345 FPS） |
-| **电池 / 供电** | `qcom-battmgr` / PMIC GLINK | ✅ 正常 | 电量计、USB/无线电源状态；原厂 67W 头实测标准 PD `9V/1.5A`（输入峰值 `12.4W`，私有电荷泵快充暂未适配） |
+| **电池 / 供电** | `qcom-battmgr` / PMIC GLINK | ✅ 正常 | 电量计、USB/无线电源状态、已修充电电流符号（KDE 充电图标正常）；通过 `battery_auth` + `input_suspend` 解锁满血 USB-PD `9V/3A`（峰值 `24.8W`，电池净充 `+14.6W`，含温度闭环保护） |
 | **内置麦克风 / 传感器** | VA Macro DMIC / SSC 传感器 | ⏳ 待适配 | 录音、重力自动旋转与自动亮度暂未接入 |
 | **摄像头 / 指纹 / 马达** | — | ⏳ 未适配 | 暂未点亮 |
 | **红外遥控** | — | ⏳ 未适配 | 不是真有人用平板红外遥控吗 😂 |
@@ -69,7 +69,7 @@
 - [ ] **传感器接入（自动旋转 & 自动亮度）**：适配 SSC 加速度计与环境光传感器（`hexagonrpcd` + `iio-sensor-proxy`）。
 - [ ] **USB-C Host / 调试网卡一键切换**：提供桌面快捷开关，方便外出直插拓展坞 / U 盘 / 键鼠与回切 USB-NCM 调试。
 - [x] **原厂充电器充电功率测试**：已实测小米原厂 67W 充电器在主线 Linux 下握手标准 USB-PD `9V / 1.5A`（USB 输入峰值 `12.4W`，亮屏电池净充 `~5.8W`，电池温升温和 `27.6→29.0°C`；未启用小米私有 PPS 电荷泵快充）。
-- [ ] **突破 12W PD 限流 / 快充适配**：排查 ADSP `input_current_limit=1.5A` 限制，评估解锁更高 PD 功率或电荷泵快充。
+- [x] **突破 12W PD 限流 / 快充适配**：通过向 PMIC GLINK 写入原厂电池认证（`XM_PROP_AUTHENTIC` / `SLAVE_AUTHENTIC`）并在热插拔时自动触发 `XM_PROP_INPUT_SUSPEND (0x35)` 重跑 AICL，已稳定解锁满血 USB-PD **`9V / 3.0A`（输入峰值 `24.8W`，亮屏电池净充 `+14.6W`，温度 `~31.9°C`）**，并修复了 `BATT_CURR_NOW` 符号反置导致的 KDE 电池充电图标不显示问题；私有 67W PPS 电荷泵（需 UVDM 加密摘要认证）留待后续探索。
 - [ ] **深度休眠（`deep`）续航调优**：已实测省电模式息屏 9 小时掉电约 10%，后续继续排查并消除 UFS `hibern8 exit failed` 告警。
 - [ ] **平板模式（键盘 360° 反折防误触）**：接入背部霍尔传感器在反折状态下自动禁用键鼠输入。
 - [ ] **长时间稳定性验证**：覆盖高负载、频繁休眠唤醒、外接 DP 显示器等场景的持续稳定性测试。
