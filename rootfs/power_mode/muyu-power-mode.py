@@ -138,20 +138,21 @@ def save_text(path: Path, val: str) -> None:
 
 def apply_kwin_tablet_mode(enabled: bool) -> None:
     val = "on" if enabled else "off"
-    tt_delay = "-1" if enabled else "0.7"
+    btn_sz = "ButtonVeryLarge" if enabled else "ButtonDefault"
     try:
         pw = pwd.getpwnam(DESKTOP_USER)
         uid = pw.pw_uid
         bus = f"/run/user/{uid}/bus"
         if not os.path.exists(bus):
             return
+        env_prefix = (
+            f'XDG_RUNTIME_DIR="/run/user/{uid}" '
+            f'DBUS_SESSION_BUS_ADDRESS="unix:path={bus}"'
+        )
         cmd = (
-            f'XDG_RUNTIME_DIR="/run/user/{uid}" '
-            f'DBUS_SESSION_BUS_ADDRESS="unix:path={bus}" '
-            f'kwriteconfig6 --notify --file kwinrc --group Input --key TabletMode {val} && '
-            f'XDG_RUNTIME_DIR="/run/user/{uid}" '
-            f'DBUS_SESSION_BUS_ADDRESS="unix:path={bus}" '
-            f'kwriteconfig6 --notify --file plasmarc --group PlasmaToolTips --key Delay -- {tt_delay}'
+            f'{env_prefix} kwriteconfig6 --notify --file kwinrc --group Input --key TabletMode {val}; '
+            f'{env_prefix} kwriteconfig6 --file breezerc --group Windeco --key ButtonSize {btn_sz}; '
+            f'{env_prefix} qdbus6 org.kde.KWin /KWin reconfigure >/dev/null 2>&1'
         )
         subprocess.run(
             ["su", "-s", "/bin/sh", DESKTOP_USER, "-c", cmd],
@@ -489,6 +490,57 @@ def cli_main(argv: list[str]) -> int:
         return 1
 
 
+def bt_watchdog_loop() -> None:
+    """Self-healing watchdog for WCN7850 Bluetooth + Focus Pen after S3/s2idle suspend."""
+    bad_streak = 0
+    while True:
+        time.sleep(8)
+        try:
+            r = subprocess.run(
+                ["btmgmt", "info"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            if "hci0:" in r.stdout:
+                bad_streak = 0
+                continue
+        except Exception:
+            pass
+
+        bad_streak += 1
+        # Require 2 consecutive checks (~16s) so we don't fight normal boot/reload
+        if bad_streak < 2:
+            continue
+
+        print("[bt-watchdog] hci0 missing; rebinding 888000.serial + restarting bluetooth & focus-pen...", flush=True)
+        try:
+            Path("/sys/bus/platform/drivers/qcom_geni_serial/unbind").write_text("888000.serial\n")
+        except Exception:
+            pass
+        time.sleep(1.0)
+        try:
+            Path("/sys/bus/platform/drivers/qcom_geni_serial/bind").write_text("888000.serial\n")
+        except Exception:
+            pass
+
+        for _ in range(6):
+            time.sleep(1.0)
+            try:
+                r = subprocess.run(["btmgmt", "info"], capture_output=True, text=True, timeout=2)
+                if "hci0:" in r.stdout:
+                    break
+            except Exception:
+                pass
+
+        subprocess.run(["systemctl", "restart", "bluetooth.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        time.sleep(2.0)
+        subprocess.run(["bluetoothctl", "power", "on"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        subprocess.run(["systemctl", "restart", "muyu-focus-pen.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        print("[bt-watchdog] WCN7850 Bluetooth & Focus Pen recovered.", flush=True)
+        bad_streak = 0
+
+
 def main() -> None:
     if len(sys.argv) > 1:
         sys.exit(cli_main(sys.argv[1:]))
@@ -499,6 +551,7 @@ def main() -> None:
         set_touch_mode_locked(load_bool(TOUCH_MODE_FILE, False), source="boot")
 
     threading.Thread(target=input_monitor_loop, daemon=True).start()
+    threading.Thread(target=bt_watchdog_loop, daemon=True).start()
     print(f"[power-mode] listening on http://{LISTEN_HOST}:{LISTEN_PORT}", flush=True)
     HTTPServer((LISTEN_HOST, LISTEN_PORT), Handler).serve_forever()
 

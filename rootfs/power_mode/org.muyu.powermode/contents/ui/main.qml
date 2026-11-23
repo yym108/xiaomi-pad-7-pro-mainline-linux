@@ -148,8 +148,8 @@ PlasmoidItem {
     }
 
     fullRepresentation: Item {
-        Layout.minimumWidth: Kirigami.Units.gridUnit * (root.largeUi ? 20 : 17)
-        Layout.minimumHeight: Kirigami.Units.gridUnit * (root.largeUi ? 19 : 16)
+        Layout.minimumWidth: Kirigami.Units.gridUnit * (root.largeUi ? 22 : 17)
+        Layout.minimumHeight: Kirigami.Units.gridUnit * (root.largeUi ? 21 : 16)
         Layout.preferredWidth: Layout.minimumWidth
         Layout.preferredHeight: Layout.minimumHeight
 
@@ -216,7 +216,8 @@ PlasmoidItem {
                     checkable: true
                     checked: root.mode === "save"
                     Layout.fillWidth: true
-                    implicitHeight: root.largeUi ? 48 : 34
+                    implicitHeight: root.largeUi ? 58 : 34
+                    font.pixelSize: root.largeUi ? Kirigami.Theme.defaultFont.pixelSize + 3 : Kirigami.Theme.defaultFont.pixelSize
                     onClicked: root.setMode("save")
                 }
                 PlasmaComponents.Button {
@@ -224,7 +225,8 @@ PlasmoidItem {
                     checkable: true
                     checked: root.mode === "balance"
                     Layout.fillWidth: true
-                    implicitHeight: root.largeUi ? 48 : 34
+                    implicitHeight: root.largeUi ? 58 : 34
+                    font.pixelSize: root.largeUi ? Kirigami.Theme.defaultFont.pixelSize + 3 : Kirigami.Theme.defaultFont.pixelSize
                     onClicked: root.setMode("balance")
                 }
                 PlasmaComponents.Button {
@@ -232,7 +234,8 @@ PlasmoidItem {
                     checkable: true
                     checked: root.mode === "perf"
                     Layout.fillWidth: true
-                    implicitHeight: root.largeUi ? 48 : 34
+                    implicitHeight: root.largeUi ? 58 : 34
+                    font.pixelSize: root.largeUi ? Kirigami.Theme.defaultFont.pixelSize + 3 : Kirigami.Theme.defaultFont.pixelSize
                     onClicked: root.setMode("perf")
                 }
             }

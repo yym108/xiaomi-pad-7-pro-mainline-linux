@@ -1,24 +1,23 @@
 #!/bin/sh
 # Install to: /usr/lib/systemd/system-sleep/muyu-bt-resume (chmod 755)
 # Xiaomi Pad 7 Pro (muyu) S3 Deep-Sleep Resume Watchdog
-# 1. Recovers WCN7850 Bluetooth (888000.serial) + bluetoothd + Focus Pen if UART stuck after S3
-# 2. Recovers dwc3-qcom (a600000.usb) HS-PHY & USB-NCM gadget (usb0) if stuck after S3
+# Uses systemd-run --no-block so systemd-suspend cgroup cleanup never kills the recovery job.
 
 [ "$1" = "post" ] || exit 0
 
-(
+systemd-run --no-block --unit=muyu-resume-recover /bin/sh -c '
     sleep 2
 
     # --- 1. WCN7850 Bluetooth + Focus Pen ---
-    if ! (timeout 3 btmgmt info 2>/dev/null | grep -q 'hci0:' && \
-          timeout 3 bluetoothctl show 2>/dev/null | grep -q 'Powered: yes'); then
+    if ! (timeout 3 btmgmt info 2>/dev/null | grep -q "hci0:" && \
+          timeout 3 bluetoothctl show 2>/dev/null | grep -q "Powered: yes"); then
         logger -t muyu-resume "hci0 unhealthy after S3 resume; rebinding 888000.serial..."
         echo "888000.serial" > /sys/bus/platform/drivers/qcom_geni_serial/unbind 2>/dev/null || true
         sleep 1
         echo "888000.serial" > /sys/bus/platform/drivers/qcom_geni_serial/bind 2>/dev/null || true
         for _i in 1 2 3 4 5 6; do
             sleep 1
-            timeout 2 btmgmt info 2>/dev/null | grep -q 'hci0:' && break
+            timeout 2 btmgmt info 2>/dev/null | grep -q "hci0:" && break
         done
         systemctl restart bluetooth.service >/dev/null 2>&1 || true
         sleep 2
@@ -45,4 +44,4 @@
             logger -t muyu-resume "USB-NCM gadget recovered."
         fi
     fi
-) >/dev/null 2>&1 &
+' >/dev/null 2>&1 || true

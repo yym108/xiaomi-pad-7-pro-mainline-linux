@@ -130,8 +130,8 @@ PlasmoidItem {
     }
 
     fullRepresentation: Item {
-        Layout.minimumWidth: Kirigami.Units.gridUnit * (root.largeUi ? 19 : 16)
-        Layout.minimumHeight: Kirigami.Units.gridUnit * (root.largeUi ? 15 : 13)
+        Layout.minimumWidth: Kirigami.Units.gridUnit * (root.largeUi ? 21 : 16)
+        Layout.minimumHeight: Kirigami.Units.gridUnit * (root.largeUi ? 17 : 13)
         Layout.preferredWidth: Layout.minimumWidth
         Layout.preferredHeight: Layout.minimumHeight
 
@@ -211,7 +211,8 @@ PlasmoidItem {
                     checkable: true
                     checked: root.chargeMode === "auto"
                     Layout.fillWidth: true
-                    implicitHeight: root.largeUi ? 48 : 34
+                    implicitHeight: root.largeUi ? 58 : 34
+                    font.pixelSize: root.largeUi ? Kirigami.Theme.defaultFont.pixelSize + 3 : Kirigami.Theme.defaultFont.pixelSize
                     onClicked: root.setMode("auto")
                 }
                 PlasmaComponents.Button {
@@ -219,7 +220,8 @@ PlasmoidItem {
                     checkable: true
                     checked: root.chargeMode === "on"
                     Layout.fillWidth: true
-                    implicitHeight: root.largeUi ? 48 : 34
+                    implicitHeight: root.largeUi ? 58 : 34
+                    font.pixelSize: root.largeUi ? Kirigami.Theme.defaultFont.pixelSize + 3 : Kirigami.Theme.defaultFont.pixelSize
                     onClicked: root.setMode("on")
                 }
                 PlasmaComponents.Button {
@@ -227,7 +229,8 @@ PlasmoidItem {
                     checkable: true
                     checked: root.chargeMode === "off"
                     Layout.fillWidth: true
-                    implicitHeight: root.largeUi ? 48 : 34
+                    implicitHeight: root.largeUi ? 58 : 34
+                    font.pixelSize: root.largeUi ? Kirigami.Theme.defaultFont.pixelSize + 3 : Kirigami.Theme.defaultFont.pixelSize
                     onClicked: root.setMode("off")
                 }
             }
