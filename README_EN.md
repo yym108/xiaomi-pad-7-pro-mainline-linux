@@ -56,7 +56,7 @@
 | **Audio Speakers** | Quad AW88261 + AudioReach | ✅ Working | `QUINARY_MI2S_RX`, PipeWire + WirePlumber + UCM2 |
 | **USB-C / DisplayPort** | QMP PHY + WCD9395 USBSS | ✅ Working | USB3, USB-NCM (`172.16.42.1`), `ttyGS0` serial, DP0 AltMode |
 | **Video Decode/Encode** | Qualcomm Iris VPU 3.3 (2-pipe) | ✅ Working | V4L2 M2M + `qcom-va-driver` zero-copy VA-API (4K60 H.264/HEVC 8&10-bit/VP9/AV1 ~135–198 FPS, 1080p60 encode ~345 FPS) |
-| **Battery / Power** | `qcom-battmgr` / PMIC GLINK | ✅ Working | Fuel gauge, USB/wireless telemetry, fixed `current_now` sign (KDE charging icon works); unlocked full USB-PD `9V/3A` (`24.8W` peak input, `+14.6W` net battery charge) with battery thermal guard |
+| **Battery / Power** | `qcom-battmgr` / PMIC GLINK | ✅ Working | Fuel gauge, USB/wireless telemetry, fixed `current_now` sign (KDE charging icon works); auto-unlocks **Xiaomi 67W `PD_PPS` + dual 2:1 charge pumps** (`apdo_max=67W`, `icl=6.10A`, `+28.8W` net at 80% SOC / `31.8°C`), with 24W standard PD fallback and battery thermal guard |
 | **Internal Mic / Sensors** | VA Macro DMIC / SSC Sensors | ⏳ Pending | Recording, auto-rotation & auto-brightness not yet wired |
 | **Cameras / Fingerprint / Haptics** | — | ⏳ Not Yet | Not yet brought up |
 | **IR Blaster** | — | ⏳ Not Yet | Does anyone really use a tablet as a TV remote? 😂 |
@@ -69,7 +69,7 @@
 - [ ] **Sensors (Auto-Rotation & Auto-Brightness)**: Bring up SSC accelerometer and ALS via `hexagonrpcd` + `iio-sensor-proxy`.
 - [ ] **USB-C Host / Gadget Quick Toggle**: Add a one-click desktop toggle between USB Host (docks/drives/peripherals) and USB-NCM debug networking.
 - [x] **Stock Charger Fast-Charging Benchmark**: Verified with the stock Xiaomi 67W charger under mainline Linux — negotiates standard USB-PD `9V / 1.5A` (`12.4W` peak USB input, `~5.8W` net battery charge with screen on, `27.6→29.0°C`; proprietary PPS charge pump is not active).
-- [x] **Higher-Wattage PD / Fast Charging**: Unlocked full USB-PD **`9V / 3.0A` (`24.8W` peak USB input, `+14.6W` net battery charge with screen on, `~31.9°C`)** by authenticating the stock dual-cell battery (`XM_PROP_AUTHENTIC` / `SLAVE_AUTHENTIC`) and automatically pulsing `XM_PROP_INPUT_SUSPEND (0x35)` on hot-plug to re-run ADSP AICL, plus fixed the inverted `BATT_CURR_NOW` sign so UPower / KDE displays the charging icon properly. Proprietary Xiaomi 67W PPS charge pump (requires UVDM digest auth) remains optional future work.
+- [x] **Higher-Wattage PD / Xiaomi 67W Fast Charging**: Automatically authenticates the stock dual-cell battery (`XM_PROP_AUTHENTIC` / `SLAVE_AUTHENTIC`) and sends `XM_PROP_VDM_CMD_VERIFIED (0x19)` + `pd_verified (0x1f)` over PMIC GLINK to unlock **Xiaomi 67W `PD_PPS` (`11V/6.1A` APDO + dual SMB1393 2:1 charge pumps, verified `+28.8W` net battery charge even at 80% SOC / `31.8°C`)**, with automatic `input_suspend` AICL unlock (`9V/3A`, `~24W`) for standard 3rd-party USB-PD chargers, battery thermal hysteresis protection, and inverted `BATT_CURR_NOW` sign fix for UPower / KDE.
 - [ ] **Deep Sleep Overnight Tuning**: Verified ~10% battery drain over 9h screen-off in power-save mode; continue cleaning up the UFS `hibern8 exit failed` resume warning.
 - [ ] **Tablet Mode (Folded Keyboard Disable)**: Hook up the rear hall sensor to disable keyboard/touchpad input when folded 360° behind the tablet.
 - [ ] **Long-Term Stability Testing**: Extended soak testing under load, repeated suspend/resume cycles, and external DisplayPort monitors.

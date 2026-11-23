@@ -1,23 +1,24 @@
-From cc253656ff55cc59ff5f8f29ef32029f0266ae0b Mon Sep 17 00:00:00 2001
+From 83bcd6d9a50726fdf4dd9f5b0ef1d226728fee84 Mon Sep 17 00:00:00 2001
 From: yym108 <183073514+yym108@users.noreply.github.com>
 Date: Mon, 23 Nov 2026 13:53:24 +0800
 Subject: [PATCH] power: supply: qcom_battmgr: fix current_now sign and add
  Xiaomi PD fast-charge OEM controls
 
 ---
- drivers/power/supply/qcom_battmgr.c | 203 +++++++++++++++++++++++++++-
- 1 file changed, 202 insertions(+), 1 deletion(-)
+ drivers/power/supply/qcom_battmgr.c | 233 +++++++++++++++++++++++++++-
+ 1 file changed, 232 insertions(+), 1 deletion(-)
 
 diff --git a/drivers/power/supply/qcom_battmgr.c b/drivers/power/supply/qcom_battmgr.c
-index bc5b81543..b342e9854 100644
+index bc5b81543..196801b4e 100644
 --- a/drivers/power/supply/qcom_battmgr.c
 +++ b/drivers/power/supply/qcom_battmgr.c
-@@ -102,6 +102,12 @@ enum qcom_battmgr_variant {
+@@ -102,6 +102,13 @@ enum qcom_battmgr_variant {
  #define BATTMGR_XM_PROPERTY_GET		0x50
  #define BATTMGR_XM_PROPERTY_SET		0x51
  
 +#define XM_PROP_AUTHENTIC		0x04
 +#define XM_PROP_VERIFY_PROCESS		0x13
++#define XM_PROP_VDM_CMD_VERIFIED	0x19
 +#define XM_PROP_PD_VERIFED		0x1f
 +#define XM_PROP_INPUT_SUSPEND		0x35
 +#define XM_PROP_FASTCHG_MODE		0x36
@@ -25,7 +26,7 @@ index bc5b81543..b342e9854 100644
  #define XM_PROP_REVERSE_CHG_MODE	0x47
  #define XM_PROP_REVERSE_CHG_STATE	0x48
  #define XM_PROP_TX_IOUT			0x61
-@@ -110,6 +116,7 @@ enum qcom_battmgr_variant {
+@@ -110,6 +117,7 @@ enum qcom_battmgr_variant {
  #define XM_PROP_PEN_HALL3		0x64
  #define XM_PROP_PEN_HALL4		0x65
  #define XM_PROP_PEN_PLACE_ERR		0x6b
@@ -33,7 +34,7 @@ index bc5b81543..b342e9854 100644
  #define CHARGE_CTRL_START_THR_MIN	50
  #define CHARGE_CTRL_START_THR_MAX	95
  #define CHARGE_CTRL_END_THR_MIN		55
-@@ -1473,7 +1480,7 @@ static void qcom_battmgr_sm8350_callback(struct qcom_battmgr *battmgr,
+@@ -1473,7 +1481,7 @@ static void qcom_battmgr_sm8350_callback(struct qcom_battmgr *battmgr,
  			battmgr->info.voltage_max = le32_to_cpu(resp->intval.value);
  			break;
  		case BATT_CURR_NOW:
@@ -42,7 +43,7 @@ index bc5b81543..b342e9854 100644
  			break;
  		case BATT_TEMP:
  			val = le32_to_cpu(resp->intval.value);
-@@ -1515,6 +1522,9 @@ static void qcom_battmgr_sm8350_callback(struct qcom_battmgr *battmgr,
+@@ -1515,6 +1523,9 @@ static void qcom_battmgr_sm8350_callback(struct qcom_battmgr *battmgr,
  		case BATT_CHG_CTRL_END_THR:
  			battmgr->info.charge_ctrl_end = le32_to_cpu(resp->intval.value);
  			break;
@@ -52,7 +53,7 @@ index bc5b81543..b342e9854 100644
  		default:
  			dev_warn(battmgr->dev, "unknown property %#x\n", property);
  			break;
-@@ -1612,6 +1622,8 @@ static void qcom_battmgr_sm8350_callback(struct qcom_battmgr *battmgr,
+@@ -1612,6 +1623,8 @@ static void qcom_battmgr_sm8350_callback(struct qcom_battmgr *battmgr,
  			battmgr->error = 0;
  		}
  		break;
@@ -61,7 +62,7 @@ index bc5b81543..b342e9854 100644
  	case BATTMGR_XM_PROPERTY_SET:
  	case BATTMGR_WLS_PROPERTY_SET:
  		if (payload_len == sizeof(resp->intval))
-@@ -1733,6 +1745,188 @@ XM_PEN_RO_ATTR(reverse_chg_state, XM_PROP_REVERSE_CHG_STATE);
+@@ -1733,6 +1746,216 @@ XM_PEN_RO_ATTR(reverse_chg_state, XM_PROP_REVERSE_CHG_STATE);
  XM_PEN_RO_ATTR(pen_hall3, XM_PROP_PEN_HALL3);
  XM_PEN_RO_ATTR(pen_hall4, XM_PROP_PEN_HALL4);
  XM_PEN_RO_ATTR(pen_place_err, XM_PROP_PEN_PLACE_ERR);
@@ -247,10 +248,38 @@ index bc5b81543..b342e9854 100644
 +	return ret ? ret : count;
 +}
 +static DEVICE_ATTR_RW(input_suspend);
++
++static ssize_t vdm_verified_show(struct device *dev,
++				 struct device_attribute *attr, char *buf)
++{
++	struct qcom_battmgr *battmgr = dev_get_drvdata(dev);
++	u32 val = 0;
++	int ret = qcom_battmgr_xm_get_prop(battmgr, XM_PROP_VDM_CMD_VERIFIED, &val);
++
++	if (ret)
++		return ret;
++	return sysfs_emit(buf, "%d\n", (s32)val);
++}
++
++static ssize_t vdm_verified_store(struct device *dev,
++				  struct device_attribute *attr,
++				  const char *buf, size_t count)
++{
++	struct qcom_battmgr *battmgr = dev_get_drvdata(dev);
++	int val, ret;
++
++	ret = kstrtoint(buf, 10, &val);
++	if (ret)
++		return ret;
++
++	ret = qcom_battmgr_xm_set_prop(battmgr, XM_PROP_VDM_CMD_VERIFIED, (u32)val);
++	return ret ? ret : count;
++}
++static DEVICE_ATTR_RW(vdm_verified);
  
  static ssize_t reverse_chg_mode_show(struct device *dev,
  				     struct device_attribute *attr, char *buf)
-@@ -1771,6 +1965,13 @@ static struct attribute *qcom_battmgr_xm_pen_attrs[] = {
+@@ -1771,6 +1994,14 @@ static struct attribute *qcom_battmgr_xm_pen_attrs[] = {
  	&dev_attr_pen_hall3.attr,
  	&dev_attr_pen_hall4.attr,
  	&dev_attr_pen_place_err.attr,
@@ -261,6 +290,7 @@ index bc5b81543..b342e9854 100644
 +	&dev_attr_thermal_level.attr,
 +	&dev_attr_usb_icl.attr,
 +	&dev_attr_input_suspend.attr,
++	&dev_attr_vdm_verified.attr,
  	NULL,
  };
  

@@ -543,28 +543,51 @@ def bt_watchdog_loop() -> None:
         bad_streak = 0
 
 
+def _write_sysfs(path: Path, text: str) -> bool:
+    try:
+        path.write_text(f"{text}\n")
+        return True
+    except Exception:
+        return False
+
+
 def _set_input_suspend(val: int) -> bool:
     node = PMIC_OEM_BASE / "input_suspend"
     if node.exists():
-        return write_sysfs(node, str(val))
+        return _write_sysfs(node, str(val))
     xm = PMIC_OEM_BASE / "xm_prop"
     if xm.exists():
-        return write_sysfs(xm, f"0x35 {val}")
+        return _write_sysfs(xm, f"0x35 {val}")
+    return False
+
+
+def _set_vdm_verified(val: int) -> bool:
+    node = PMIC_OEM_BASE / "vdm_verified"
+    if node.exists():
+        return _write_sysfs(node, str(val))
+    xm = PMIC_OEM_BASE / "xm_prop"
+    if xm.exists():
+        return _write_sysfs(xm, f"0x19 {val}")
     return False
 
 
 def charging_manager_loop() -> None:
-    """Unlock full USB-PD 9V/3A charging on muyu and enforce battery thermal safety.
+    """Unlock Xiaomi 67W PD_PPS dual charge-pump fast charging (and 24W standard PD fallback).
 
     - Authenticates stock dual-cell battery (XM_PROP_AUTHENTIC + SLAVE_AUTHENTIC)
       so ADSP lifts the unauthenticated 1.5A/5V fallback cap.
-    - On PD hot-plug, if ADSP's initial AICL settles at 1.5A while the adapter
-      advertises >= 2.0A, pulses XM_PROP_INPUT_SUSPEND (0x35) 1 -> 0 once per
-      plug-in to trigger a clean 3.0A ICL re-settlement (~23-25W).
+    - On PD plug-in, sends XM_PROP_VDM_CMD_VERIFIED (0x19=1) + pd_verified=1
+      once per attach to unlock Xiaomi 67W PD_PPS (11V/6.1A APDO + dual SMB1393
+      2:1 charge pumps).
+    - For non-Xiaomi standard USB-PD adapters capped at 1.5A on hot-plug while
+      advertising >= 2.0A, pulses XM_PROP_INPUT_SUSPEND (0x35) 1 -> 0 once to
+      trigger a clean 3.0A ICL re-settlement (~24W).
     - Applies software battery thermal hysteresis via thermal_level while keeping
       ADSP hardware JEITA protections untouched.
     """
     auth_node = PMIC_OEM_BASE / "battery_auth"
+    pd_ver_node = PMIC_OEM_BASE / "pd_verified"
+    apdo_node = PMIC_OEM_BASE / "apdo_max"
     therm_node = PMIC_OEM_BASE / "thermal_level"
     plug_seen_ts: float | None = None
     unlocked_this_plug = False
@@ -576,12 +599,12 @@ def charging_manager_loop() -> None:
             if auth_node.exists():
                 try:
                     if auth_node.read_text().strip() != "1":
-                        write_sysfs(auth_node, "1")
-                        print("[chg-mgr] Enabled battery_auth=1", flush=True)
+                        if _write_sysfs(auth_node, "1"):
+                            print("[chg-mgr] Enabled battery_auth=1", flush=True)
                 except Exception:
                     pass
 
-            # 2. One-shot PD hot-plug 1.5A ICL unlock
+            # 2. One-shot PD_PPS (67W) / standard PD (24W) unlock on plug-in
             online = read_int(USB_BASE / "online", 0)
             if online == 0:
                 plug_seen_ts = None
@@ -595,22 +618,44 @@ def charging_manager_loop() -> None:
                         usb_type = (USB_BASE / "usb_type").read_text().strip()
                     except Exception:
                         usb_type = ""
-                    imax = read_int(USB_BASE / "current_max", 0)
-                    icl = read_int(USB_BASE / "input_current_limit", 0)
-                    if icl >= 2000000:
+
+                    if "[PD_PPS]" in usb_type:
                         unlocked_this_plug = True
-                    elif "[PD]" in usb_type and imax >= 2000000 and 0 < icl <= 1500000:
-                        print(
-                            f"[chg-mgr] PD adapter (Imax={imax/1e6:.2f}A) capped at ICL={icl/1e6:.2f}A; "
-                            "pulsing input_suspend 1->0 to re-run AICL...",
-                            flush=True,
-                        )
-                        if _set_input_suspend(1):
-                            time.sleep(1.5)
-                            _set_input_suspend(0)
-                            time.sleep(2.5)
-                            new_icl = read_int(USB_BASE / "input_current_limit", 0)
-                            print(f"[chg-mgr] Post-pulse ICL={new_icl/1e6:.2f}A", flush=True)
+                    elif "[PD]" in usb_type:
+                        # Tier 1: Try Xiaomi UVDM verified -> PD_PPS 67W dual charge pumps
+                        if _set_vdm_verified(1):
+                            time.sleep(1.0)
+                            if pd_ver_node.exists():
+                                _write_sysfs(pd_ver_node, "1")
+                            time.sleep(3.0)
+                            try:
+                                usb_type = (USB_BASE / "usb_type").read_text().strip()
+                            except Exception:
+                                pass
+
+                        if "[PD_PPS]" in usb_type:
+                            apdo = read_int(apdo_node, 0)
+                            icl = read_int(USB_BASE / "input_current_limit", 0)
+                            print(
+                                f"[chg-mgr] Unlocked Xiaomi PD_PPS ({apdo}W APDO, ICL={icl/1e6:.2f}A, dual charge pumps)",
+                                flush=True,
+                            )
+                        else:
+                            # Tier 2: Standard USB-PD fallback — pulse input_suspend if stuck at 1.5A
+                            imax = read_int(USB_BASE / "current_max", 0)
+                            icl = read_int(USB_BASE / "input_current_limit", 0)
+                            if imax >= 2000000 and 0 < icl <= 1500000:
+                                print(
+                                    f"[chg-mgr] Standard PD (Imax={imax/1e6:.2f}A) capped at ICL={icl/1e6:.2f}A; "
+                                    "pulsing input_suspend 1->0 to re-run AICL...",
+                                    flush=True,
+                                )
+                                if _set_input_suspend(1):
+                                    time.sleep(1.5)
+                                    _set_input_suspend(0)
+                                    time.sleep(2.5)
+                                    new_icl = read_int(USB_BASE / "input_current_limit", 0)
+                                    print(f"[chg-mgr] Post-pulse ICL={new_icl/1e6:.2f}A", flush=True)
                         unlocked_this_plug = True
 
             # 3. Battery thermal closed-loop guard (hysteresis)
@@ -624,7 +669,7 @@ def charging_manager_loop() -> None:
                 elif temp_c <= 38.0:
                     target_lvl = 0
                 if target_lvl != last_therm_lvl:
-                    if write_sysfs(therm_node, str(target_lvl)):
+                    if _write_sysfs(therm_node, str(target_lvl)):
                         print(
                             f"[chg-mgr] Battery temp={temp_c:.1f}C -> thermal_level={target_lvl}",
                             flush=True,
