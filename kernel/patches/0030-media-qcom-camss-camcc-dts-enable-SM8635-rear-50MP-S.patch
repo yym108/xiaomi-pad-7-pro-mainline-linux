@@ -1,0 +1,735 @@
+From bebad57f559d1fe2818051fffe0d12f5254c4d47 Mon Sep 17 00:00:00 2001
+From: yym108 <183073514+yym108@users.noreply.github.com>
+Date: Mon, 23 Nov 2026 18:29:45 +0800
+Subject: [PATCH] media: qcom: camss/camcc/dts: enable SM8635 rear 50MP S5KJN1
+ camera on Xiaomi Pad 7 Pro
+
+---
+ .../boot/dts/qcom/sm8635-xiaomi-muyu.dts      | 411 ++++++++++++++++++
+ drivers/clk/qcom/camcc-sm8650.c               |  75 +++-
+ drivers/clk/qcom/gcc-sm8635.c                 |  32 ++
+ drivers/media/platform/qcom/camss/camss.c     |  15 +
+ drivers/pinctrl/qcom/pinctrl-sm8635.c         |  42 +-
+ 5 files changed, 567 insertions(+), 8 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts b/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
+index 98a4d0495..16287e9f5 100644
+--- a/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
++++ b/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
+@@ -11,6 +11,7 @@
+ #include <dt-bindings/gpio/gpio.h>
+ #include <dt-bindings/clock/qcom,dsi-phy-28nm.h>
+ #include <dt-bindings/clock/qcom,rpmh.h>
++#include <dt-bindings/clock/qcom,sm8650-camcc.h>
+ #include <dt-bindings/clock/qcom,sm8650-dispcc.h>
+ #include <dt-bindings/clock/qcom,sm8650-gcc.h>
+ #include <dt-bindings/clock/qcom,sm8650-gpucc.h>
+@@ -1311,6 +1312,15 @@ vreg_l23b_1p8: ldo23 {
+ 					regulator-max-microvolt = <1800000>;
+ 					regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+ 				};
++
++				vreg_bob1: bob {
++					regulator-name = "vreg_bob1";
++					regulator-min-microvolt = <3288000>;
++					regulator-max-microvolt = <3320000>;
++					regulator-initial-mode = <RPMH_REGULATOR_MODE_AUTO>;
++					regulator-boot-on;
++					regulator-always-on;
++				};
+ 			};
+ 
+ 			regulators-1 {
+@@ -1376,6 +1386,66 @@ vreg_l4e_1p8: ldo4 {
+ 					regulator-always-on;
+ 				};
+ 			};
++
++			regulators-4 {
++				compatible = "qcom,pm8010-rpmh-regulators";
++				qcom,pmic-id = "n";
++
++				vdd-l1-l2-supply = <&vreg_s2b_1p25>;
++				vdd-l3-l4-supply = <&vreg_bob1>;
++				vdd-l5-supply = <&vreg_s1b_1p85>;
++				vdd-l6-supply = <&vreg_bob1>;
++				vdd-l7-supply = <&vreg_bob1>;
++
++				vreg_l1n_1p05: ldo1 {
++					regulator-name = "vreg_l1n_1p05";
++					regulator-min-microvolt = <1048000>;
++					regulator-max-microvolt = <1056000>;
++					regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++				};
++
++				vreg_l2n_1p2: ldo2 {
++					regulator-name = "vreg_l2n_1p2";
++					regulator-min-microvolt = <1200000>;
++					regulator-max-microvolt = <1200000>;
++					regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++				};
++
++				vreg_l3n_2p8: ldo3 {
++					regulator-name = "vreg_l3n_2p8";
++					regulator-min-microvolt = <2800000>;
++					regulator-max-microvolt = <2800000>;
++					regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++				};
++
++				vreg_l4n_1p8: ldo4 {
++					regulator-name = "vreg_l4n_1p8";
++					regulator-min-microvolt = <1800000>;
++					regulator-max-microvolt = <1800000>;
++					regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++				};
++
++				vreg_l5n_1p8: ldo5 {
++					regulator-name = "vreg_l5n_1p8";
++					regulator-min-microvolt = <1800000>;
++					regulator-max-microvolt = <1800000>;
++					regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++				};
++
++				vreg_l6n_2p8: ldo6 {
++					regulator-name = "vreg_l6n_2p8";
++					regulator-min-microvolt = <2800000>;
++					regulator-max-microvolt = <2800000>;
++					regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++				};
++
++				vreg_l7n_2p8: ldo7 {
++					regulator-name = "vreg_l7n_2p8";
++					regulator-min-microvolt = <2800000>;
++					regulator-max-microvolt = <2800000>;
++					regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++				};
++			};
+ 		};
+ 
+ 		cpufreq_hw: cpufreq@17d91000 {
+@@ -1543,6 +1613,255 @@ videocc: clock-controller@aaf0000 {
+ 			#power-domain-cells = <1>;
+ 		};
+ 
++		camcc: clock-controller@ade0000 {
++			compatible = "qcom,sm8635-camcc";
++			reg = <0x0 0x0ade0000 0x0 0x20000>;
++			clocks = <&gcc GCC_CAMERA_AHB_CLK>,
++				 <&bi_tcxo_div2>,
++				 <&bi_tcxo_ao_div2>,
++				 <&sleep_clk>;
++			power-domains = <&rpmhpd RPMHPD_MMCX>,
++					<&rpmhpd RPMHPD_MXC>;
++			#clock-cells = <1>;
++			#reset-cells = <1>;
++			#power-domain-cells = <1>;
++		};
++
++		cci0: cci@ac15000 {
++			compatible = "qcom,sm8650-cci", "qcom,msm8996-cci";
++			#address-cells = <1>;
++			#size-cells = <0>;
++			reg = <0x0 0x0ac15000 0x0 0x1000>;
++			interrupts = <GIC_SPI 426 IRQ_TYPE_EDGE_RISING>;
++			power-domains = <&camcc CAM_CC_TITAN_TOP_GDSC>;
++			clocks = <&camcc CAM_CC_CAMNOC_AXI_NRT_CLK>,
++				 <&camcc CAM_CC_CPAS_AHB_CLK>,
++				 <&camcc CAM_CC_CCI_0_CLK>;
++			clock-names = "camnoc_axi",
++				      "cpas_ahb",
++				      "cci";
++			assigned-clocks = <&camcc CAM_CC_CCI_0_CLK>;
++			assigned-clock-rates = <37500000>;
++			pinctrl-0 = <&cci0_0_default &cci0_1_default>;
++			pinctrl-1 = <&cci0_0_sleep &cci0_1_sleep>;
++			pinctrl-names = "default", "sleep";
++			status = "okay";
++
++			cci0_i2c0: i2c-bus@0 {
++				reg = <0>;
++				clock-frequency = <400000>;
++				#address-cells = <1>;
++				#size-cells = <0>;
++			};
++
++			cci0_i2c1: i2c-bus@1 {
++				reg = <1>;
++				clock-frequency = <400000>;
++				#address-cells = <1>;
++				#size-cells = <0>;
++
++				camera@10 {
++					compatible = "samsung,s5kjn1";
++					reg = <0x10>;
++
++					clocks = <&camcc CAM_CC_MCLK0_CLK>;
++					assigned-clocks = <&camcc CAM_CC_MCLK0_CLK>;
++					assigned-clock-rates = <24000000>;
++
++					pinctrl-names = "default", "sleep";
++					pinctrl-0 = <&cam_mclk0_default &cam_wide_rst_default>;
++					pinctrl-1 = <&cam_mclk0_sleep &cam_wide_rst_sleep>;
++
++					reset-gpios = <&tlmm 14 GPIO_ACTIVE_LOW>;
++
++					vddd-supply = <&vreg_l1n_1p05>;
++					vdda-supply = <&vreg_l3n_2p8>;
++					vddio-supply = <&vreg_l4n_1p8>;
++					afvdd-supply = <&vreg_l7n_2p8>;
++
++					orientation = <1>;
++					rotation = <90>;
++
++					port {
++						s5kjn1_ep: endpoint {
++							data-lanes = <0 1 2 3>;
++							link-frequencies = /bits/ 64 <700000000>;
++							remote-endpoint = <&csiphy1_ep>;
++						};
++					};
++				};
++			};
++		};
++
++		camss: isp@acb6000 {
++			compatible = "qcom,sm8635-camss";
++			reg = <0x0 0x0acb6000 0x0 0x1000>,
++			      <0x0 0x0acb8000 0x0 0x1000>,
++			      <0x0 0x0acba000 0x0 0x1000>,
++			      <0x0 0x0acbc000 0x0 0x1000>,
++			      <0x0 0x0accb000 0x0 0x1000>,
++			      <0x0 0x0acd0000 0x0 0x1000>,
++			      <0x0 0x0ace4000 0x0 0x2000>,
++			      <0x0 0x0ace6000 0x0 0x2000>,
++			      <0x0 0x0ace8000 0x0 0x2000>,
++			      <0x0 0x0acea000 0x0 0x2000>,
++			      <0x0 0x0acec000 0x0 0x2000>,
++			      <0x0 0x0ac62000 0x0 0xf000>,
++			      <0x0 0x0ac71000 0x0 0xf000>,
++			      <0x0 0x0ac80000 0x0 0xf000>,
++			      <0x0 0x0accc000 0x0 0x2000>,
++			      <0x0 0x0acd1000 0x0 0x2000>;
++			reg-names = "csid_wrapper",
++				    "csid0",
++				    "csid1",
++				    "csid2",
++				    "csid_lite0",
++				    "csid_lite1",
++				    "csiphy0",
++				    "csiphy1",
++				    "csiphy2",
++				    "csiphy3",
++				    "csiphy4",
++				    "vfe0",
++				    "vfe1",
++				    "vfe2",
++				    "vfe_lite0",
++				    "vfe_lite1";
++
++			clocks = <&camcc CAM_CC_CAMNOC_AXI_RT_CLK>,
++				 <&camcc CAM_CC_CPAS_AHB_CLK>,
++				 <&camcc CAM_CC_CPAS_FAST_AHB_CLK>,
++				 <&camcc CAM_CC_CPAS_IFE_0_CLK>,
++				 <&camcc CAM_CC_CPAS_IFE_1_CLK>,
++				 <&camcc CAM_CC_CPAS_IFE_2_CLK>,
++				 <&camcc CAM_CC_CPAS_IFE_LITE_CLK>,
++				 <&camcc CAM_CC_CSID_CLK>,
++				 <&camcc CAM_CC_CSIPHY0_CLK>,
++				 <&camcc CAM_CC_CSI0PHYTIMER_CLK>,
++				 <&camcc CAM_CC_CSIPHY1_CLK>,
++				 <&camcc CAM_CC_CSI1PHYTIMER_CLK>,
++				 <&camcc CAM_CC_CSIPHY2_CLK>,
++				 <&camcc CAM_CC_CSI2PHYTIMER_CLK>,
++				 <&camcc CAM_CC_CSIPHY3_CLK>,
++				 <&camcc CAM_CC_CSI3PHYTIMER_CLK>,
++				 <&camcc CAM_CC_CSIPHY4_CLK>,
++				 <&camcc CAM_CC_CSI4PHYTIMER_CLK>,
++				 <&camcc CAM_CC_CSID_CSIPHY_RX_CLK>,
++				 <&gcc GCC_CAMERA_HF_AXI_CLK>,
++				 <&camcc CAM_CC_QDSS_DEBUG_XO_CLK>,
++				 <&camcc CAM_CC_IFE_0_CLK>,
++				 <&camcc CAM_CC_IFE_0_FAST_AHB_CLK>,
++				 <&camcc CAM_CC_IFE_1_CLK>,
++				 <&camcc CAM_CC_IFE_1_FAST_AHB_CLK>,
++				 <&camcc CAM_CC_IFE_2_CLK>,
++				 <&camcc CAM_CC_IFE_2_FAST_AHB_CLK>,
++				 <&camcc CAM_CC_IFE_LITE_CLK>,
++				 <&camcc CAM_CC_IFE_LITE_AHB_CLK>,
++				 <&camcc CAM_CC_IFE_LITE_CPHY_RX_CLK>,
++				 <&camcc CAM_CC_IFE_LITE_CSID_CLK>;
++			clock-names = "camnoc_axi",
++				      "cpas_ahb",
++				      "cpas_fast_ahb",
++				      "cpas_vfe0",
++				      "cpas_vfe1",
++				      "cpas_vfe2",
++				      "cpas_vfe_lite",
++				      "csid",
++				      "csiphy0",
++				      "csiphy0_timer",
++				      "csiphy1",
++				      "csiphy1_timer",
++				      "csiphy2",
++				      "csiphy2_timer",
++				      "csiphy3",
++				      "csiphy3_timer",
++				      "csiphy4",
++				      "csiphy4_timer",
++				      "csiphy_rx",
++				      "gcc_axi_hf",
++				      "qdss_debug_xo",
++				      "vfe0",
++				      "vfe0_fast_ahb",
++				      "vfe1",
++				      "vfe1_fast_ahb",
++				      "vfe2",
++				      "vfe2_fast_ahb",
++				      "vfe_lite",
++				      "vfe_lite_ahb",
++				      "vfe_lite_cphy_rx",
++				      "vfe_lite_csid";
++
++			interrupts = <GIC_SPI 601 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 603 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 431 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 605 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 376 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 477 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 478 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 479 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 448 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 122 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 602 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 604 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 688 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 606 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 377 IRQ_TYPE_EDGE_RISING>;
++			interrupt-names = "csid0",
++					  "csid1",
++					  "csid2",
++					  "csid_lite0",
++					  "csid_lite1",
++					  "csiphy0",
++					  "csiphy1",
++					  "csiphy2",
++					  "csiphy3",
++					  "csiphy4",
++					  "vfe0",
++					  "vfe1",
++					  "vfe2",
++					  "vfe_lite0",
++					  "vfe_lite1";
++
++			interconnects = <&gem_noc SM8635_GEM_NOC_CHM_APPS QCOM_ICC_TAG_ACTIVE_ONLY
++					 &config_noc SM8635_CONFIG_NOC_QHS_CAMERA_CFG QCOM_ICC_TAG_ACTIVE_ONLY>,
++					<&mmss_noc SM8635_MMSS_NOC_QNM_CAMNOC_HF QCOM_ICC_TAG_ALWAYS
++					 &mc_virt SM8635_MC_VIRT_EBI QCOM_ICC_TAG_ALWAYS>;
++			interconnect-names = "ahb",
++					     "hf_mnoc";
++
++			iommus = <&apps_smmu 0x800 0x20>;
++
++			power-domains = <&camcc CAM_CC_IFE_0_GDSC>,
++					<&camcc CAM_CC_IFE_1_GDSC>,
++					<&camcc CAM_CC_IFE_2_GDSC>,
++					<&camcc CAM_CC_TITAN_TOP_GDSC>;
++			power-domain-names = "ife0", "ife1", "ife2", "top";
++
++			vdd-csiphy01-0p9-supply = <&vreg_l1d_0p88>;
++			vdd-csiphy01-1p2-supply = <&vreg_l3d_1p2>;
++			vdd-csiphy24-0p9-supply = <&vreg_l1d_0p88>;
++			vdd-csiphy24-1p2-supply = <&vreg_l3d_1p2>;
++			vdd-csiphy35-0p9-supply = <&vreg_l1d_0p88>;
++			vdd-csiphy35-1p2-supply = <&vreg_l3d_1p2>;
++
++			status = "okay";
++
++			ports {
++				#address-cells = <1>;
++				#size-cells = <0>;
++
++				port@1 {
++					reg = <1>;
++
++					csiphy1_ep: endpoint {
++						clock-lanes = <7>;
++						data-lanes = <0 1 2 3>;
++						remote-endpoint = <&s5kjn1_ep>;
++					};
++				};
++			};
++		};
++
+ 		gpucc: clock-controller@3d90000 {
+ 			compatible = "qcom,sm8635-gpucc";
+ 			reg = <0x0 0x03d90000 0x0 0xa000>;
+@@ -1688,6 +2007,98 @@ qup_i2c3_default: qup-i2c3-default-state {
+ 				bias-disable;
+ 			};
+ 
++			cci0_0_default: cci0-0-default-state {
++				sda-pins {
++					pins = "gpio70";
++					function = "cci_i2c_sda0";
++					drive-strength = <2>;
++					bias-pull-up;
++				};
++
++				scl-pins {
++					pins = "gpio71";
++					function = "cci_i2c_scl0";
++					drive-strength = <2>;
++					bias-pull-up;
++				};
++			};
++
++			cci0_0_sleep: cci0-0-sleep-state {
++				sda-pins {
++					pins = "gpio70";
++					function = "cci_i2c_sda0";
++					drive-strength = <2>;
++					bias-pull-down;
++				};
++
++				scl-pins {
++					pins = "gpio71";
++					function = "cci_i2c_scl0";
++					drive-strength = <2>;
++					bias-pull-down;
++				};
++			};
++
++			cci0_1_default: cci0-1-default-state {
++				sda-pins {
++					pins = "gpio72";
++					function = "cci_i2c_sda1";
++					drive-strength = <4>;
++					bias-disable;
++				};
++
++				scl-pins {
++					pins = "gpio73";
++					function = "cci_i2c_scl1";
++					drive-strength = <4>;
++					bias-disable;
++				};
++			};
++
++			cci0_1_sleep: cci0-1-sleep-state {
++				sda-pins {
++					pins = "gpio72";
++					function = "cci_i2c_sda1";
++					drive-strength = <2>;
++					bias-pull-down;
++				};
++
++				scl-pins {
++					pins = "gpio73";
++					function = "cci_i2c_scl1";
++					drive-strength = <2>;
++					bias-pull-down;
++				};
++			};
++
++			cam_mclk0_default: cam-mclk0-default-state {
++				pins = "gpio64";
++				function = "cam_mclk";
++				drive-strength = <4>;
++				bias-disable;
++			};
++
++			cam_mclk0_sleep: cam-mclk0-sleep-state {
++				pins = "gpio64";
++				function = "cam_mclk";
++				drive-strength = <2>;
++				bias-pull-down;
++			};
++
++			cam_wide_rst_default: cam-wide-rst-default-state {
++				pins = "gpio14";
++				function = "gpio";
++				drive-strength = <2>;
++				bias-disable;
++			};
++
++			cam_wide_rst_sleep: cam-wide-rst-sleep-state {
++				pins = "gpio14";
++				function = "gpio";
++				drive-strength = <2>;
++				bias-pull-down;
++			};
++
+ 			nanosic_mcu_default: nanosic-mcu-default-state {
+ 				sleep-pins {
+ 					pins = "gpio98";
+diff --git a/drivers/clk/qcom/camcc-sm8650.c b/drivers/clk/qcom/camcc-sm8650.c
+index 3aad816ed..fd8cbbb59 100644
+--- a/drivers/clk/qcom/camcc-sm8650.c
++++ b/drivers/clk/qcom/camcc-sm8650.c
+@@ -3532,6 +3532,19 @@ static struct clk_alpha_pll *cam_cc_sm8650_plls[] = {
+ 	&cam_cc_pll10,
+ };
+ 
++static struct clk_alpha_pll *cam_cc_sm8635_plls[] = {
++	&cam_cc_pll0,
++	&cam_cc_pll1,
++	&cam_cc_pll2,
++	&cam_cc_pll3,
++	&cam_cc_pll4,
++	&cam_cc_pll5,
++	&cam_cc_pll6,
++	&cam_cc_pll7,
++	&cam_cc_pll8,
++	&cam_cc_pll9,
++};
++
+ static const u32 cam_cc_sm8650_critical_cbcrs[] = {
+ 	0x132ec, /* CAM_CC_GDSC_CLK */
+ 	0x13308, /* CAM_CC_SLEEP_CLK */
+@@ -3554,6 +3567,24 @@ static const struct qcom_cc_driver_data cam_cc_sm8650_driver_data = {
+ 	.num_clk_cbcrs = ARRAY_SIZE(cam_cc_sm8650_critical_cbcrs),
+ };
+ 
++static const struct qcom_cc_driver_data cam_cc_sm8635_driver_data = {
++	.alpha_plls = cam_cc_sm8635_plls,
++	.num_alpha_plls = ARRAY_SIZE(cam_cc_sm8635_plls),
++	.clk_cbcrs = cam_cc_sm8650_critical_cbcrs,
++	.num_clk_cbcrs = ARRAY_SIZE(cam_cc_sm8650_critical_cbcrs),
++};
++
++static struct gdsc *cam_cc_sm8635_gdscs[] = {
++	[CAM_CC_TITAN_TOP_GDSC] = &cam_cc_titan_top_gdsc,
++	[CAM_CC_BPS_GDSC] = &cam_cc_bps_gdsc,
++	[CAM_CC_IFE_0_GDSC] = &cam_cc_ife_0_gdsc,
++	[CAM_CC_IFE_1_GDSC] = &cam_cc_ife_1_gdsc,
++	[CAM_CC_IFE_2_GDSC] = &cam_cc_ife_2_gdsc,
++	[CAM_CC_IPE_0_GDSC] = &cam_cc_ipe_0_gdsc,
++	[CAM_CC_SFE_0_GDSC] = &cam_cc_sfe_0_gdsc,
++	[CAM_CC_SFE_1_GDSC] = &cam_cc_sfe_1_gdsc,
++};
++
+ static const struct qcom_cc_desc cam_cc_sm8650_desc = {
+ 	.config = &cam_cc_sm8650_regmap_config,
+ 	.clks = cam_cc_sm8650_clocks,
+@@ -3566,15 +3597,55 @@ static const struct qcom_cc_desc cam_cc_sm8650_desc = {
+ 	.driver_data = &cam_cc_sm8650_driver_data,
+ };
+ 
++static const struct qcom_cc_desc cam_cc_sm8635_desc = {
++	.config = &cam_cc_sm8650_regmap_config,
++	.clks = cam_cc_sm8650_clocks,
++	.num_clks = ARRAY_SIZE(cam_cc_sm8650_clocks),
++	.resets = cam_cc_sm8650_resets,
++	.num_resets = ARRAY_SIZE(cam_cc_sm8650_resets),
++	.gdscs = cam_cc_sm8635_gdscs,
++	.num_gdscs = ARRAY_SIZE(cam_cc_sm8635_gdscs),
++	.use_rpm = true,
++	.driver_data = &cam_cc_sm8635_driver_data,
++};
++
+ static const struct of_device_id cam_cc_sm8650_match_table[] = {
+-	{ .compatible = "qcom,sm8650-camcc" },
++	{ .compatible = "qcom,sm8650-camcc", .data = &cam_cc_sm8650_desc },
++	{ .compatible = "qcom,sm8635-camcc", .data = &cam_cc_sm8635_desc },
+ 	{ }
+ };
+ MODULE_DEVICE_TABLE(of, cam_cc_sm8650_match_table);
+ 
+ static int cam_cc_sm8650_probe(struct platform_device *pdev)
+ {
+-	return qcom_cc_probe(pdev, &cam_cc_sm8650_desc);
++	const struct qcom_cc_desc *desc = of_device_get_match_data(&pdev->dev);
++
++	if (desc == &cam_cc_sm8635_desc) {
++		/* SM8635 (cliffs) omits PLL10, SBI, SFE_2, CSIPHY5-7, and JPEG_1 */
++		cam_cc_sm8650_clocks[CAM_CC_PLL10] = NULL;
++		cam_cc_sm8650_clocks[CAM_CC_PLL10_OUT_EVEN] = NULL;
++		cam_cc_sm8650_clocks[CAM_CC_CPAS_SBI_CLK] = NULL;
++		cam_cc_sm8650_clocks[CAM_CC_CPAS_SFE_2_CLK] = NULL;
++		cam_cc_sm8650_clocks[CAM_CC_CSI5PHYTIMER_CLK] = NULL;
++		cam_cc_sm8650_clocks[CAM_CC_CSI5PHYTIMER_CLK_SRC] = NULL;
++		cam_cc_sm8650_clocks[CAM_CC_CSI6PHYTIMER_CLK] = NULL;
++		cam_cc_sm8650_clocks[CAM_CC_CSI6PHYTIMER_CLK_SRC] = NULL;
++		cam_cc_sm8650_clocks[CAM_CC_CSI7PHYTIMER_CLK] = NULL;
++		cam_cc_sm8650_clocks[CAM_CC_CSI7PHYTIMER_CLK_SRC] = NULL;
++		cam_cc_sm8650_clocks[CAM_CC_CSIPHY5_CLK] = NULL;
++		cam_cc_sm8650_clocks[CAM_CC_CSIPHY6_CLK] = NULL;
++		cam_cc_sm8650_clocks[CAM_CC_CSIPHY7_CLK] = NULL;
++		cam_cc_sm8650_clocks[CAM_CC_JPEG_1_CLK] = NULL;
++		cam_cc_sm8650_clocks[CAM_CC_SBI_CLK] = NULL;
++		cam_cc_sm8650_clocks[CAM_CC_SBI_FAST_AHB_CLK] = NULL;
++		cam_cc_sm8650_clocks[CAM_CC_SBI_SHIFT_CLK] = NULL;
++		cam_cc_sm8650_clocks[CAM_CC_SFE_2_CLK] = NULL;
++		cam_cc_sm8650_clocks[CAM_CC_SFE_2_CLK_SRC] = NULL;
++		cam_cc_sm8650_clocks[CAM_CC_SFE_2_FAST_AHB_CLK] = NULL;
++		cam_cc_sm8650_clocks[CAM_CC_SFE_2_SHIFT_CLK] = NULL;
++	}
++
++	return qcom_cc_probe(pdev, desc);
+ }
+ 
+ static struct platform_driver cam_cc_sm8650_driver = {
+diff --git a/drivers/clk/qcom/gcc-sm8635.c b/drivers/clk/qcom/gcc-sm8635.c
+index 8dd66a3fc..f08b1087e 100644
+--- a/drivers/clk/qcom/gcc-sm8635.c
++++ b/drivers/clk/qcom/gcc-sm8635.c
+@@ -898,6 +898,36 @@ static struct clk_branch gcc_qupv3_wrap1_s4_clk = {
+ 	},
+ };
+ 
++static struct clk_branch gcc_camera_hf_axi_clk = {
++	.halt_reg = 0x26010,
++	.halt_check = BRANCH_HALT_SKIP,
++	.hwcg_reg = 0x26010,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x26010,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_camera_hf_axi_clk",
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
++static struct clk_branch gcc_camera_sf_axi_clk = {
++	.halt_reg = 0x2601c,
++	.halt_check = BRANCH_HALT_SKIP,
++	.hwcg_reg = 0x2601c,
++	.hwcg_bit = 1,
++	.clkr = {
++		.enable_reg = 0x2601c,
++		.enable_mask = BIT(0),
++		.hw.init = &(const struct clk_init_data) {
++			.name = "gcc_camera_sf_axi_clk",
++			.ops = &clk_branch2_ops,
++		},
++	},
++};
++
+ static struct clk_branch gcc_disp_hf_axi_clk = {
+ 	.halt_reg = 0x2700c,
+ 	.halt_check = BRANCH_HALT_SKIP,
+@@ -1389,6 +1419,8 @@ static struct clk_regmap *gcc_sm8635_clocks[] = {
+ 	[GCC_GPLL0] = &gcc_gpll0.clkr,
+ 	[GCC_GPLL0_OUT_EVEN] = &gcc_gpll0_out_even.clkr,
+ 	[GCC_GPLL4] = &gcc_gpll4.clkr,
++	[GCC_CAMERA_HF_AXI_CLK] = &gcc_camera_hf_axi_clk.clkr,
++	[GCC_CAMERA_SF_AXI_CLK] = &gcc_camera_sf_axi_clk.clkr,
+ 	[GCC_DISP_HF_AXI_CLK] = &gcc_disp_hf_axi_clk.clkr,
+ 	[GCC_GPU_GPLL0_CLK_SRC] = &gcc_gpu_gpll0_clk_src.clkr,
+ 	[GCC_GPU_GPLL0_DIV_CLK_SRC] = &gcc_gpu_gpll0_div_clk_src.clkr,
+diff --git a/drivers/media/platform/qcom/camss/camss.c b/drivers/media/platform/qcom/camss/camss.c
+index f8e5cf9f3..37396e364 100644
+--- a/drivers/media/platform/qcom/camss/camss.c
++++ b/drivers/media/platform/qcom/camss/camss.c
+@@ -5789,6 +5789,20 @@ static const struct camss_resources sm8650_resources = {
+ 	.vfe_num = ARRAY_SIZE(vfe_res_sm8650),
+ };
+ 
++static const struct camss_resources sm8635_resources = {
++	.version = CAMSS_8650,
++	.pd_name = "top",
++	.csiphy_res = csiphy_res_sm8650,
++	.csid_res = csid_res_sm8650,
++	.csid_wrapper_res = &csid_wrapper_res_sm8550,
++	.vfe_res = vfe_res_sm8650,
++	.icc_res = icc_res_sm8650,
++	.icc_path_num = ARRAY_SIZE(icc_res_sm8650),
++	.csiphy_num = 5,
++	.csid_num = ARRAY_SIZE(csid_res_sm8650),
++	.vfe_num = ARRAY_SIZE(vfe_res_sm8650),
++};
++
+ static const struct camss_resources x1e80100_resources = {
+ 	.version = CAMSS_X1E80100,
+ 	.pd_name = "top",
+@@ -5822,6 +5836,7 @@ static const struct of_device_id camss_dt_match[] = {
+ 	{ .compatible = "qcom,sm6350-camss", .data = &sm6350_resources },
+ 	{ .compatible = "qcom,sm8250-camss", .data = &sm8250_resources },
+ 	{ .compatible = "qcom,sm8550-camss", .data = &sm8550_resources },
++	{ .compatible = "qcom,sm8635-camss", .data = &sm8635_resources },
+ 	{ .compatible = "qcom,sm8650-camss", .data = &sm8650_resources },
+ 	{ .compatible = "qcom,x1e80100-camss", .data = &x1e80100_resources },
+ 	{ .compatible = "qcom,glymur-camss", .data = &x1e80100_resources },
+diff --git a/drivers/pinctrl/qcom/pinctrl-sm8635.c b/drivers/pinctrl/qcom/pinctrl-sm8635.c
+index ee4bac071..c5464b264 100644
+--- a/drivers/pinctrl/qcom/pinctrl-sm8635.c
++++ b/drivers/pinctrl/qcom/pinctrl-sm8635.c
+@@ -455,6 +455,11 @@ enum sm8635_functions {
+ 	msm_mux_qup1_se3,
+ 	msm_mux_qup1_se4,
+ 	msm_mux_pcie0_clk_req_n,
++	msm_mux_cam_mclk,
++	msm_mux_cci_i2c_sda0,
++	msm_mux_cci_i2c_scl0,
++	msm_mux_cci_i2c_sda1,
++	msm_mux_cci_i2c_scl1,
+ 	msm_mux__,
+ };
+ 
+@@ -534,6 +539,26 @@ static const char *const pcie0_clk_req_n_groups[] = {
+ 	"gpio118",
+ };
+ 
++static const char *const cam_mclk_groups[] = {
++	"gpio64", "gpio68",
++};
++
++static const char *const cci_i2c_sda0_groups[] = {
++	"gpio70",
++};
++
++static const char *const cci_i2c_scl0_groups[] = {
++	"gpio71",
++};
++
++static const char *const cci_i2c_sda1_groups[] = {
++	"gpio72",
++};
++
++static const char *const cci_i2c_scl1_groups[] = {
++	"gpio73",
++};
++
+ static const char *const egpio_groups[] = {
+ 	"gpio0",   "gpio1",   "gpio2",   "gpio3",
+ 	"gpio139", "gpio140", "gpio141", "gpio142",
+@@ -558,6 +583,11 @@ static const struct pinfunction sm8635_functions[] = {
+ 	MSM_PIN_FUNCTION(qup1_se3),
+ 	MSM_PIN_FUNCTION(qup1_se4),
+ 	MSM_PIN_FUNCTION(pcie0_clk_req_n),
++	MSM_PIN_FUNCTION(cam_mclk),
++	MSM_PIN_FUNCTION(cci_i2c_sda0),
++	MSM_PIN_FUNCTION(cci_i2c_scl0),
++	MSM_PIN_FUNCTION(cci_i2c_sda1),
++	MSM_PIN_FUNCTION(cci_i2c_scl1),
+ };
+ 
+ static const struct msm_pingroup sm8635_groups[] = {
+@@ -625,16 +655,16 @@ static const struct msm_pingroup sm8635_groups[] = {
+ 	[61] = PINGROUP(61, _, _),
+ 	[62] = PINGROUP(62, _, _),
+ 	[63] = PINGROUP(63, _, _),
+-	[64] = PINGROUP(64, _, _),
++	[64] = PINGROUP(64, cam_mclk, _),
+ 	[65] = PINGROUP(65, _, _),
+ 	[66] = PINGROUP(66, _, _),
+ 	[67] = PINGROUP(67, _, _),
+-	[68] = PINGROUP(68, _, _),
++	[68] = PINGROUP(68, cam_mclk, _),
+ 	[69] = PINGROUP(69, _, _),
+-	[70] = PINGROUP(70, _, _),
+-	[71] = PINGROUP(71, _, _),
+-	[72] = PINGROUP(72, _, _),
+-	[73] = PINGROUP(73, _, _),
++	[70] = PINGROUP(70, cci_i2c_sda0, _),
++	[71] = PINGROUP(71, cci_i2c_scl0, _),
++	[72] = PINGROUP(72, cci_i2c_sda1, _),
++	[73] = PINGROUP(73, cci_i2c_scl1, _),
+ 	[74] = PINGROUP(74, _, _),
+ 	[75] = PINGROUP(75, _, _),
+ 	[76] = PINGROUP(76, _, _),
+-- 
+2.54.0 (Apple Git-157)
+

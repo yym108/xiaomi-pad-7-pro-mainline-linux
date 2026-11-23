@@ -304,7 +304,7 @@ def classify_input_device(name: str) -> str | None:
     low = name.lower()
     if "touchscreen" in low:
         return "touch"
-    if "touchpad" in low or "mouse" in low or "keyboard" in low:
+    if "touchpad" in low or "mouse" in low:
         return "desktop"
     if "gpio-keys" in low:
         return "switch"
@@ -312,7 +312,7 @@ def classify_input_device(name: str) -> str | None:
 
 
 def input_monitor_loop() -> None:
-    """Monitor touchscreen vs keyboard/touchpad/hall events to auto-switch KWin Touch Mode."""
+    """Monitor touchscreen vs mouse/touchpad/hall events to auto-switch KWin Touch Mode."""
     EV_KEY = 0x01
     EV_REL = 0x02
     EV_ABS = 0x03
