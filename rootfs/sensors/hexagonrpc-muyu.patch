@@ -1,0 +1,202 @@
+diff --git a/hexagonrpcd/apps_std.c b/hexagonrpcd/apps_std.c
+index 7172bf0..1a079d6 100644
+--- a/hexagonrpcd/apps_std.c
++++ b/hexagonrpcd/apps_std.c
+@@ -73,6 +73,9 @@ static uint32_t apps_std_fclose(void *data,
+ 	const uint32_t *first_in = inbufs[0].p;
+ 	int ret;
+ 
++	if (*first_in == 0x7fff)
++		return 0;
++
+ 	ret = hexagonfs_close(ctx->fds, *first_in);
+ 	if (ret) {
+ 		fprintf(stderr, "Could not close: %s\n", strerror(-ret));
+@@ -120,6 +123,21 @@ static uint32_t apps_std_fread(void *data,
+ 	return 0;
+ }
+ 
++static uint32_t apps_std_fwrite(void *data,
++				const struct fastrpc_io_buffer *inbufs,
++				struct fastrpc_io_buffer *outbufs)
++{
++	struct {
++		uint32_t written;
++		uint32_t is_eof;
++	} *first_out = outbufs[0].p;
++
++	first_out->written = inbufs[1].s;
++	first_out->is_eof = 0;
++
++	return 0;
++}
++
+ static uint32_t apps_std_fseek(void *data,
+ 			       const struct fastrpc_io_buffer *inbufs,
+ 			       struct fastrpc_io_buffer *outbufs)
+@@ -167,9 +185,8 @@ static uint32_t apps_std_fopen_with_env(void *data,
+ 
+ 	rw_mode = ((const char *) inbufs[4].p)[0];
+ 	if (rw_mode == 'w' || rw_mode == 'a') {
+-		fprintf(stderr, "Tried to open %s for writing\n",
+-				(const char *) inbufs[3].p);
+-		return AEE_EUNSUPPORTED;
++		*out = 0x7fff;
++		return 0;
+ 	}
+ 
+ 	if (!strcmp(inbufs[1].p, "ADSP_LIBRARY_PATH")) {
+@@ -420,7 +437,10 @@ static const struct fastrpc_function_impl apps_std_procs[] = {
+ 		.def = &apps_std_fread_def,
+ 		.impl = apps_std_fread,
+ 	},
+-	{ .def = NULL, .impl = NULL, },
++	{
++		.def = &apps_std_fwrite_def,
++		.impl = apps_std_fwrite,
++	},
+ 	{ .def = NULL, .impl = NULL, },
+ 	{ .def = NULL, .impl = NULL, },
+ 	{ .def = NULL, .impl = NULL, },
+diff --git a/hexagonrpcd/interface/apps_std.c b/hexagonrpcd/interface/apps_std.c
+index 67b3ace..d66d414 100644
+--- a/hexagonrpcd/interface/apps_std.c
++++ b/hexagonrpcd/interface/apps_std.c
+@@ -75,6 +75,21 @@ const struct hrpc_method_def_interp4 apps_std_fread_def = {
+ 	.inner_types = NULL,
+ };
+ 
++static struct hrpc_arg_def_interp4 apps_std_fwrite_args[] = {
++	{ HRPC_ARG_WORD, sizeof(uint32_t) },
++	{ HRPC_ARG_BLOB_SEQ, sizeof(char) },
++	{ HRPC_ARG_OUT_BLOB, sizeof(uint32_t) },
++	{ HRPC_ARG_OUT_BLOB, sizeof(uint32_t) },
++};
++
++const struct hrpc_method_def_interp4 apps_std_fwrite_def = {
++	.msg_id = 5,
++	.n_args = HRPC_ARRAY_SIZE(apps_std_fwrite_args),
++	.args = apps_std_fwrite_args,
++	.n_inner_types = 0,
++	.inner_types = NULL,
++};
++
+ static struct hrpc_arg_def_interp4 apps_std_fseek_args[] = {
+ 	{ HRPC_ARG_WORD, sizeof(uint32_t) },
+ 	{ HRPC_ARG_WORD, sizeof(uint32_t) },
+diff --git a/hexagonrpcd/interface/apps_std.h b/hexagonrpcd/interface/apps_std.h
+index b80a1ca..a333c35 100644
+--- a/hexagonrpcd/interface/apps_std.h
++++ b/hexagonrpcd/interface/apps_std.h
+@@ -28,6 +28,7 @@ extern struct hrpc_method_def_interp4 apps_std_freopen_def;
+ extern struct hrpc_method_def_interp4 apps_std_fflush_def;
+ extern struct hrpc_method_def_interp4 apps_std_fclose_def;
+ extern struct hrpc_method_def_interp4 apps_std_fread_def;
++extern struct hrpc_method_def_interp4 apps_std_fwrite_def;
+ extern struct hrpc_method_def_interp4 apps_std_fseek_def;
+ extern struct hrpc_method_def_interp4 apps_std_fopen_with_env_def;
+ extern struct hrpc_method_def_interp4 apps_std_opendir_def;
+diff --git a/hexagonrpcd/listener.c b/hexagonrpcd/listener.c
+index 3414974..7b3693a 100644
+--- a/hexagonrpcd/listener.c
++++ b/hexagonrpcd/listener.c
+@@ -425,13 +425,13 @@ static int return_for_next_invoke(int fd,
+ 				  struct fastrpc_io_buffer **decoded)
+ {
+ 	struct fastrpc_decoder_context *ctx;
+-	char inbufs[256];
++	char inbufs[16384];
+ 	char *outbufs = NULL;
+ 	uint32_t inbufs_len;
+ 	uint32_t outbufs_len;
+ 	int ret;
+ 
+-	outbufs_len = outbufs_calculate_size(REMOTE_SCALARS_OUTBUFS(*sc), returned);
++	outbufs_len = returned ? outbufs_calculate_size(REMOTE_SCALARS_OUTBUFS(*sc), returned) : 0;
+ 
+ 	if (outbufs_len) {
+ 		outbufs = malloc(outbufs_len);
+@@ -447,7 +447,7 @@ static int return_for_next_invoke(int fd,
+ 				  *rctx, result,
+ 				  outbufs_len, outbufs,
+ 				  rctx, handle, sc,
+-				  &inbufs_len, 256, inbufs);
++				  &inbufs_len, 16384, inbufs);
+ 	if (ret) {
+ 		if (ret == -1)
+ 			perror("Could not fetch next FastRPC message");
+@@ -457,7 +457,7 @@ static int return_for_next_invoke(int fd,
+ 		goto err_free_outbufs;
+ 	}
+ 
+-	if (inbufs_len > 256) {
++	if (inbufs_len > 16384) {
+ 		fprintf(stderr, "Large (>256B) input buffers aren't implemented\n");
+ 		ret = -1;
+ 		goto err_free_outbufs;
+@@ -526,17 +526,19 @@ static int invoke_requested_procedure(size_t n_ifaces,
+ 	}
+ 
+ 	if (method >= ifaces[handle]->n_procs) {
+-		fprintf(stderr, "Unsupported method: %u (%08x)\n", method, sc);
+-		*result = AEE_EUNSUPPORTED;
+-		return 1;
++		fprintf(stderr, "Unsupported method: %u (%08x) - returning 0\n", method, sc);
++		*result = 0;
++		*returned = NULL;
++		return 0;
+ 	}
+ 
+ 	impl = &ifaces[handle]->procs[method];
+ 
+ 	if (impl->def == NULL || impl->impl == NULL) {
+-		fprintf(stderr, "Unsupported method: %u (%08x)\n", method, sc);
+-		*result = AEE_EUNSUPPORTED;
+-		return 1;
++		fprintf(stderr, "Unsupported method: %u (%08x) - returning 0\n", method, sc);
++		*result = 0;
++		*returned = NULL;
++		return 0;
+ 	}
+ 
+ 	ret = count_sizes4(impl->def, REMOTE_SCALARS_INBUFS(sc),
+diff --git a/hexagonrpcd/rpcd_builder.c b/hexagonrpcd/rpcd_builder.c
+index d374958..2d934e1 100644
+--- a/hexagonrpcd/rpcd_builder.c
++++ b/hexagonrpcd/rpcd_builder.c
+@@ -29,7 +29,7 @@
+ #define ACDBDATA		"/acdb/"
+ #define DSP_LIBS		"/dsp/"
+ #define SENSORS_CONFIG		"/sensors/config/"
+-#define SENSORS_REGISTRY	"/sensors/registry/"
++#define SENSORS_REGISTRY	"/sensors/persist_registry/"
+ #define SNS_REG_CONFIG		"/sensors/sns_reg.conf"
+ #define SYSFS_SOCINFO		"/socinfo/"
+ 
+@@ -162,9 +162,7 @@ struct hexagonfs_dirent *construct_root_dir(const char *prefix, const char *dsp)
+ 	 */
+ 	persist_dir = hfs_mkdir("persist", 1,
+ 				hfs_mkdir("sensors", 1,
+-					hfs_mkdir("registry", 1,
+-						hfs_map("registry", sns_reg)
+-					)
++					hfs_map("registry", sns_reg)
+ 				)
+ 		      );
+ 
+@@ -182,7 +180,14 @@ struct hexagonfs_dirent *construct_root_dir(const char *prefix, const char *dsp)
+ 				)
+ 			);
+ 
+-	return hfs_mkdir("/", 6,
++	return hfs_mkdir("/", 7,
++			hfs_mkdir("odm", 1,
++				hfs_mkdir("etc", 1,
++					hfs_mkdir("sensors", 1,
++						hfs_map_or_empty("config", sns_cfg)
++					)
++				)
++			),
+ 			hfs_mkdir("mnt", 1,
+ 				hfs_mkdir("vendor", 1,
+ 					persist_dir

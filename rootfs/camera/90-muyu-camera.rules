@@ -1,0 +1,2 @@
+SUBSYSTEM=="dma_heap", MODE="0660", GROUP="video", TAG+="uaccess"
+KERNEL=="udmabuf", MODE="0660", GROUP="video", TAG+="uaccess"
