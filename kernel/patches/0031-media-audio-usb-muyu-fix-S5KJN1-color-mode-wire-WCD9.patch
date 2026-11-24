@@ -1,0 +1,365 @@
+From deb245788ab49c5f595730b7cfe164109a806396 Mon Sep 17 00:00:00 2001
+From: yym <183073514+yym108@users.noreply.github.com>
+Date: Tue, 24 Nov 2026 08:51:56 +0800
+Subject: [PATCH] media/audio/usb: muyu: fix S5KJN1 color mode, wire WCD9395
+ SoundWire mics, and complete USB1 DT
+
+---
+ .../boot/dts/qcom/sm8635-xiaomi-muyu.dts      | 253 +++++++++++++++++-
+ drivers/media/i2c/s5kjn1.c                    |  16 +-
+ 2 files changed, 254 insertions(+), 15 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts b/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
+index 16287e9f5..262d80ee9 100644
+--- a/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
++++ b/arch/arm64/boot/dts/qcom/sm8635-xiaomi-muyu.dts
+@@ -97,12 +97,52 @@ switch-table-hall {
+ 		};
+ 	};
+ 
++	wcd939x: audio-codec {
++		compatible = "qcom,wcd9395-codec", "qcom,wcd9390-codec";
++
++		pinctrl-0 = <&wcd_reset_active>;
++		pinctrl-names = "default";
++
++		qcom,micbias1-microvolt = <2750000>;
++		qcom,micbias2-microvolt = <2750000>;
++		qcom,micbias3-microvolt = <2750000>;
++		qcom,micbias4-microvolt = <2750000>;
++		qcom,mbhc-buttons-vthreshold-microvolt = <75000 150000 237000 500000 500000 500000 500000 500000>;
++		qcom,mbhc-headset-vthreshold-microvolt = <1700000>;
++		qcom,mbhc-headphone-vthreshold-microvolt = <50000>;
++		qcom,rx-device = <&wcd_rx>;
++		qcom,tx-device = <&wcd_tx>;
++
++		reset-gpios = <&lpass_tlmm 12 GPIO_ACTIVE_LOW>;
++
++		vdd-buck-supply = <&vreg_l7b_1p8>;
++		vdd-rxtx-supply = <&vreg_l7b_1p8>;
++		vdd-io-supply = <&vreg_l7b_1p8>;
++		vdd-px-supply = <&vreg_l7b_1p8>;
++		vdd-mic-bias-supply = <&vreg_bob1>;
++
++		#sound-dai-cells = <1>;
++	};
++
+ 	sound {
+ 		compatible = "qcom,sm8650-sndcard", "qcom,sm8450-sndcard";
+ 		model = "Xiaomi-Pad-7-Pro";
+ 		pinctrl-0 = <&quin_mi2s_active>;
+ 		pinctrl-names = "default";
+ 
++		audio-routing =
++			"IN1_HPHL", "HPHL_OUT",
++			"IN2_HPHR", "HPHR_OUT",
++			"AMIC1", "MIC BIAS1",
++			"AMIC2", "MIC BIAS2",
++			"AMIC3", "MIC BIAS3",
++			"AMIC4", "MIC BIAS3",
++			"AMIC5", "MIC BIAS4",
++			"TX SWR_INPUT0", "ADC1_OUTPUT",
++			"TX SWR_INPUT1", "ADC2_OUTPUT",
++			"TX SWR_INPUT2", "ADC3_OUTPUT",
++			"TX SWR_INPUT3", "ADC4_OUTPUT";
++
+ 		speaker-dai-link {
+ 			link-name = "Quinary MI2S Playback";
+ 
+@@ -137,6 +177,38 @@ platform {
+ 				sound-dai = <&q6apm>;
+ 			};
+ 		};
++
++		wcd-playback-dai-link {
++			link-name = "WCD Playback";
++
++			cpu {
++				sound-dai = <&q6apmbedai RX_CODEC_DMA_RX_0>;
++			};
++
++			codec {
++				sound-dai = <&wcd939x 0>, <&swr1 0>, <&lpass_rxmacro 0>;
++			};
++
++			platform {
++				sound-dai = <&q6apm>;
++			};
++		};
++
++		wcd-capture-dai-link {
++			link-name = "WCD Capture";
++
++			cpu {
++				sound-dai = <&q6apmbedai TX_CODEC_DMA_TX_3>;
++			};
++
++			codec {
++				sound-dai = <&wcd939x 1>, <&swr2 1>, <&lpass_txmacro 0>;
++			};
++
++			platform {
++				sound-dai = <&q6apm>;
++			};
++		};
+ 	};
+ 
+ 	smp2p_adsp: smp2p-adsp {
+@@ -1935,8 +2007,11 @@ usb_1: usb@a600000 {
+ 			reg = <0x0 0x0a600000 0x0 0xfc100>;
+ 			interrupts-extended = <&intc GIC_SPI 133 IRQ_TYPE_LEVEL_HIGH>,
+ 					      <&intc GIC_SPI 130 IRQ_TYPE_LEVEL_HIGH>,
+-					      <&intc GIC_SPI 131 IRQ_TYPE_LEVEL_HIGH>;
+-			interrupt-names = "dwc_usb3", "pwr_event", "hs_phy_irq";
++					      <&intc GIC_SPI 131 IRQ_TYPE_LEVEL_HIGH>,
++					      <&pdc 14 IRQ_TYPE_EDGE_RISING>,
++					      <&pdc 15 IRQ_TYPE_EDGE_RISING>;
++			interrupt-names = "dwc_usb3", "pwr_event", "hs_phy_irq",
++					  "dp_hs_phy_irq", "dm_hs_phy_irq";
+ 			clocks = <&gcc GCC_CFG_NOC_USB3_PRIM_AXI_CLK>,
+ 				 <&gcc GCC_USB30_PRIM_MASTER_CLK>,
+ 				 <&gcc GCC_AGGRE_USB3_PRIM_AXI_CLK>,
+@@ -1950,7 +2025,13 @@ usb_1: usb@a600000 {
+ 			resets = <&gcc GCC_USB30_PRIM_BCR>;
+ 			phys = <&usb_1_hsphy>;
+ 			phy-names = "usb2-phy";
++			interconnects = <&aggre1_noc SM8635_AGGRE1_NOC_XM_USB3_0 QCOM_ICC_TAG_ALWAYS
++					 &mc_virt SM8635_MC_VIRT_EBI QCOM_ICC_TAG_ALWAYS>,
++					<&gem_noc SM8635_GEM_NOC_CHM_APPS QCOM_ICC_TAG_ACTIVE_ONLY
++					 &config_noc SM8635_CONFIG_NOC_QHS_USB3_0 QCOM_ICC_TAG_ACTIVE_ONLY>;
++			interconnect-names = "usb-ddr", "apps-usb";
+ 			power-domains = <&gcc USB30_PRIM_GDSC>;
++			required-opps = <&rpmhpd_opp_nom>;
+ 			iommus = <&apps_smmu 0x40 0>;
+ 			dr_mode = "peripheral";
+ 			maximum-speed = "high-speed";
+@@ -1960,6 +2041,9 @@ usb_1: usb@a600000 {
+ 			snps,dis_u2_susphy_quirk;
+ 			snps,dis_u3_susphy_quirk;
+ 			snps,dis_enblslpm_quirk;
++			snps,dis-u1-entry-quirk;
++			snps,dis-u2-entry-quirk;
++			snps,is-utmi-l1-suspend;
+ 			snps,usb2-lpm-disable;
+ 			snps,has-lpm-erratum;
+ 			tx-fifo-resize;
+@@ -3101,6 +3185,127 @@ q6prmcc: clock-controller {
+ 			};
+ 		};
+ 
++		lpass_rxmacro: codec@6ac0000 {
++			compatible = "qcom,sm8650-lpass-rx-macro", "qcom,sm8550-lpass-rx-macro";
++			reg = <0x0 0x06ac0000 0x0 0x1000>;
++			clocks = <&q6prmcc LPASS_CLK_ID_RX_CORE_TX_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
++				 <&q6prmcc LPASS_HW_MACRO_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
++				 <&q6prmcc LPASS_HW_DCODEC_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
++				 <&lpass_vamacro>;
++			clock-names = "mclk",
++				      "macro",
++				      "dcodec",
++				      "fsgen";
++
++			#clock-cells = <0>;
++			clock-output-names = "mclk";
++			#sound-dai-cells = <1>;
++		};
++
++		swr1: soundwire@6ad0000 {
++			compatible = "qcom,soundwire-v2.0.0";
++			reg = <0x0 0x06ad0000 0x0 0x10000>;
++			interrupts = <GIC_SPI 155 IRQ_TYPE_LEVEL_HIGH>;
++			clocks = <&lpass_rxmacro>;
++			clock-names = "iface";
++			label = "RX";
++
++			pinctrl-0 = <&rx_swr_active>;
++			pinctrl-names = "default";
++
++			qcom,din-ports = <1>;
++			qcom,dout-ports = <11>;
++
++			qcom,ports-sinterval =		/bits/ 16 <0x03 0x1f 0x1f 0x07 0x03 0xff 0xff 0x31 0xff 0xff 0xff 0xff>;
++			qcom,ports-offset1 =		/bits/ 8 <0x00 0x00 0x0b 0x09 0x01 0xff 0xff 0x00 0xff 0xff 0xff 0xff>;
++			qcom,ports-offset2 =		/bits/ 8 <0x00 0x00 0x0b 0x00 0x00 0xff 0xff 0x00 0xff 0xff 0xff 0xff>;
++			qcom,ports-hstart =		/bits/ 8 <0xff 0x03 0xff 0xff 0xff 0xff 0xff 0x00 0xff 0xff 0xff 0xff>;
++			qcom,ports-hstop =		/bits/ 8 <0xff 0x06 0xff 0xff 0xff 0xff 0xff 0x0f 0xff 0xff 0xff 0xff>;
++			qcom,ports-word-length =	/bits/ 8 <0x01 0x07 0x04 0xff 0xff 0xff 0xff 0x18 0xff 0xff 0xff 0xff>;
++			qcom,ports-block-pack-mode =	/bits/ 8 <0xff 0x00 0x01 0xff 0xff 0xff 0xff 0x01 0xff 0xff 0xff 0xff>;
++			qcom,ports-block-group-count =	/bits/ 8 <0xff 0xff 0xff 0x01 0x03 0xff 0xff 0x00 0xff 0xff 0xff 0xff>;
++			qcom,ports-lane-control =	/bits/ 8 <0x01 0x00 0x00 0x00 0x00 0xff 0xff 0x01 0xff 0xff 0xff 0xff>;
++
++			#address-cells = <2>;
++			#size-cells = <0>;
++			#sound-dai-cells = <1>;
++
++			wcd_rx: codec@0,4 {
++				compatible = "sdw20217010e00";
++				reg = <0 4>;
++				qcom,rx-port-mapping = <1 2 3 4 5 9>;
++			};
++		};
++
++		lpass_txmacro: codec@6ae0000 {
++			compatible = "qcom,sm8650-lpass-tx-macro", "qcom,sm8550-lpass-tx-macro";
++			reg = <0x0 0x06ae0000 0x0 0x1000>;
++			clocks = <&q6prmcc LPASS_CLK_ID_TX_CORE_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
++				 <&q6prmcc LPASS_HW_MACRO_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
++				 <&q6prmcc LPASS_HW_DCODEC_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
++				 <&lpass_vamacro>;
++			clock-names = "mclk",
++				      "macro",
++				      "dcodec",
++				      "fsgen";
++
++			#clock-cells = <0>;
++			clock-output-names = "mclk";
++			#sound-dai-cells = <1>;
++		};
++
++		swr2: soundwire@6d30000 {
++			compatible = "qcom,soundwire-v2.0.0";
++			reg = <0x0 0x06d30000 0x0 0x10000>;
++			interrupts = <GIC_SPI 496 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 520 IRQ_TYPE_LEVEL_HIGH>;
++			interrupt-names = "core", "wakeup";
++			clocks = <&lpass_txmacro>;
++			clock-names = "iface";
++			label = "TX";
++
++			pinctrl-0 = <&tx_swr_active>;
++			pinctrl-names = "default";
++
++			qcom,din-ports = <4>;
++			qcom,dout-ports = <1>;
++
++			qcom,ports-sinterval-low =	/bits/ 8 <0x00 0x01 0x01 0x03 0x03>;
++			qcom,ports-offset1 =		/bits/ 8 <0x00 0x00 0x00 0x01 0x01>;
++			qcom,ports-offset2 =		/bits/ 8 <0x00 0x00 0x00 0x00 0x00>;
++			qcom,ports-hstart =		/bits/ 8 <0xff 0xff 0xff 0xff 0xff>;
++			qcom,ports-hstop =		/bits/ 8 <0xff 0xff 0xff 0xff 0xff>;
++			qcom,ports-word-length =	/bits/ 8 <0xff 0xff 0xff 0xff 0xff>;
++			qcom,ports-block-pack-mode =	/bits/ 8 <0xff 0xff 0xff 0xff 0xff>;
++			qcom,ports-block-group-count =	/bits/ 8 <0xff 0xff 0xff 0xff 0xff>;
++			qcom,ports-lane-control =	/bits/ 8 <0xff 0x01 0x02 0x00 0x00>;
++
++			#address-cells = <2>;
++			#size-cells = <0>;
++			#sound-dai-cells = <1>;
++
++			wcd_tx: codec@0,3 {
++				compatible = "sdw20217010e00";
++				reg = <0 3>;
++				qcom,tx-port-mapping = <2 2 3 4>;
++			};
++		};
++
++		lpass_vamacro: codec@6d44000 {
++			compatible = "qcom,sm8650-lpass-va-macro", "qcom,sm8550-lpass-va-macro";
++			reg = <0x0 0x06d44000 0x0 0x1000>;
++			clocks = <&q6prmcc LPASS_CLK_ID_TX_CORE_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
++				 <&q6prmcc LPASS_HW_MACRO_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
++				 <&q6prmcc LPASS_HW_DCODEC_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
++			clock-names = "mclk",
++				      "macro",
++				      "dcodec";
++
++			#clock-cells = <0>;
++			clock-output-names = "fsgen";
++			#sound-dai-cells = <1>;
++		};
++
+ 		lpass_tlmm: pinctrl@6e80000 {
+ 			compatible = "qcom,sm8650-lpass-lpi-pinctrl";
+ 			reg = <0x0 0x06e80000 0x0 0x20000>;
+@@ -3111,6 +3316,50 @@ lpass_tlmm: pinctrl@6e80000 {
+ 			#gpio-cells = <2>;
+ 			gpio-ranges = <&lpass_tlmm 0 0 23>;
+ 
++			tx_swr_active: tx-swr-active-state {
++				clk-pins {
++					pins = "gpio0";
++					function = "swr_tx_clk";
++					drive-strength = <2>;
++					slew-rate = <1>;
++					bias-disable;
++				};
++
++				data-pins {
++					pins = "gpio1", "gpio2", "gpio14";
++					function = "swr_tx_data";
++					drive-strength = <2>;
++					slew-rate = <1>;
++					bias-bus-hold;
++				};
++			};
++
++			rx_swr_active: rx-swr-active-state {
++				clk-pins {
++					pins = "gpio3";
++					function = "swr_rx_clk";
++					drive-strength = <2>;
++					slew-rate = <1>;
++					bias-disable;
++				};
++
++				data-pins {
++					pins = "gpio4", "gpio5";
++					function = "swr_rx_data";
++					drive-strength = <2>;
++					slew-rate = <1>;
++					bias-bus-hold;
++				};
++			};
++
++			wcd_reset_active: wcd-reset-active-state {
++				pins = "gpio12";
++				function = "gpio";
++				drive-strength = <16>;
++				bias-disable;
++				output-high;
++			};
++
+ 			quin_mi2s_active: quin-mi2s-active-state {
+ 				sck-pins {
+ 					pins = "gpio6";
+diff --git a/drivers/media/i2c/s5kjn1.c b/drivers/media/i2c/s5kjn1.c
+index 3b4d05257..73837e3ad 100644
+--- a/drivers/media/i2c/s5kjn1.c
++++ b/drivers/media/i2c/s5kjn1.c
+@@ -727,18 +727,6 @@ static const struct s5kjn1_mode s5kjn1_supported_modes[] = {
+ 			.num_regs = ARRAY_SIZE(s5kjn1_4080x3072_30fps_mode),
+ 		},
+ 	},
+-	{
+-		.width = 8160,
+-		.height = 6144,
+-		.hts = 8688,
+-		.vts = 6400,
+-		.exposure = 6144,
+-		.exposure_margin = 44,
+-		.reg_list = {
+-			.regs = s5kjn1_8160x6144_10fps_mode,
+-			.num_regs = ARRAY_SIZE(s5kjn1_8160x6144_10fps_mode),
+-		},
+-	},
+ };
+ 
+ static int s5kjn1_set_ctrl(struct v4l2_ctrl *ctrl)
+@@ -1077,11 +1065,13 @@ static int s5kjn1_get_selection(struct v4l2_subdev *sd,
+ 
+ 	switch (sel->target) {
+ 	case V4L2_SEL_TGT_CROP:
++	case V4L2_SEL_TGT_CROP_DEFAULT:
+ 	case V4L2_SEL_TGT_CROP_BOUNDS:
++	case V4L2_SEL_TGT_NATIVE_SIZE:
+ 		sel->r.left = 0;
+ 		sel->r.top = 0;
+ 		sel->r.width = s5kjn1->mode->width;
+-		sel->r.height = s5kjn1->mode->width;
++		sel->r.height = s5kjn1->mode->height;
+ 		return 0;
+ 	default:
+ 		return -EINVAL;
+-- 
+2.54.0 (Apple Git-157)
+

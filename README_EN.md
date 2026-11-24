@@ -23,7 +23,7 @@
 
 ## ✨ Highlights
 
-- **Pure Mainline Linux `7.4.0-rc3`**: Built directly on upstream Linux with **28 self-contained patches** ([`kernel/patches/0001`–`0028`](kernel/patches/)) rather than a downstream Android kernel fork.
+- **Pure Mainline Linux `7.4.0-rc3`**: Built directly on upstream Linux with **31 self-contained patches** ([`kernel/patches/0001`–`0031`](kernel/patches/)) rather than a downstream Android kernel fork.
 - **Non-Destructive A/B Dual-Boot + One-Tap Switching**:
   - Modern Android tablets ship with two independent A/B boot slots (originally designed for seamless OTA updates). This setup leaves **stock HyperOS 100% untouched on Slot A** as a permanent fallback, while running **Arch Linux ARM + KDE Plasma 6** from **Slot B** and a dedicated `80 GiB` partition.
   - **HyperOS → Linux**: Tap the Quick Settings Tile (**切换 Arch Linux**) to cold-boot straight into desktop Linux.
@@ -52,28 +52,32 @@
 | **Focus Pen (`P81c`)** | NT36532 THP + BLE L2CAP ATT | ✅ Working | 8192-level pressure, 70° tilt, 3 side buttons, hover-click, auto alias |
 | **Pen Qi Charging** | Qualcomm PMIC GLINK OEM | ✅ Working | Auto-charge on attach, `pen_soc` & power telemetry, KDE 6 Plasmoid |
 | **Magnetic Keyboard** | Nanosic WN8030 (I2C) + WN8012 | ✅ Working | Full keyboard, touchpad, 100-level backlight, media keys, lid sleep, QTEE MiAuth |
-| **Wi-Fi / Bluetooth** | Qualcomm WCN7850 | ✅ Working | Wi-Fi 7 (`ath12k`) + Bluetooth 5.4 (`hci_qca`) |
+| **Wi-Fi / Bluetooth** | Qualcomm WCN7850 | ✅ Working | Wi-Fi 7 (`ath12k`) + Bluetooth 5.4 (`hci_qca`), S3 suspend/resume BT deadlock fixed |
 | **Audio Speakers** | Quad AW88261 + AudioReach | ✅ Working | `QUINARY_MI2S_RX`, PipeWire + WirePlumber + UCM2 |
-| **USB-C / DisplayPort** | QMP PHY + WCD9395 USBSS | ✅ Working | USB3, USB-NCM (`172.16.42.1`), `ttyGS0` serial, DP0 AltMode |
+| **Internal Microphones** | WCD9395 (`AMIC1 + AMIC3`) + SoundWire `swr2` | 🔧 Pending Listening Check | Hardware path & AudioReach `TX_CODEC_DMA_TX_3` / UCM2 wired (`<&swr2 1>`), loopback signal verified; awaiting human playback check |
+| **Rear Camera** | 50MP Samsung `S5KJN1` + SM8635 CAMSS | ✅ Working | `4080×3072 @ 30fps` color output via `libcamera` SoftISP + `kamoso` photo/video |
+| **ADSP SSC Sensors** | `lsm6dso` Accel / `stk3bcx` ALS / `qmc6308` Compass | ✅ Working | Patched `hexagonrpcd` + `iio-sensor-proxy`; KDE panel widget adds rotation lock, smooth auto-brightness & ambient keyboard backlight |
+| **USB-C / DisplayPort** | QMP PHY + WCD9395 USBSS | ✅ Working | USB3, USB gadget networking (`172.16.42.1`), `ttyGS0` serial, DP0 AltMode |
 | **Video Decode/Encode** | Qualcomm Iris VPU 3.3 (2-pipe) | ✅ Working | V4L2 M2M + `qcom-va-driver` zero-copy VA-API (4K60 H.264/HEVC 8&10-bit/VP9/AV1 ~135–198 FPS, 1080p60 encode ~345 FPS) |
 | **Battery / Power** | `qcom-battmgr` / PMIC GLINK | ✅ Working | Fuel gauge, USB/wireless telemetry, fixed `current_now` sign (KDE charging icon works); auto-unlocks **Xiaomi 67W `PD_PPS` + dual 2:1 charge pumps** (`apdo_max=67W`, `icl=6.10A`, `+28.8W` net at 80% SOC / `31.8°C`), with 24W standard PD fallback and battery thermal guard |
-| **Internal Mic / Sensors** | VA Macro DMIC / SSC Sensors | ⏳ Pending | Recording, auto-rotation & auto-brightness not yet wired |
-| **Cameras / Fingerprint / Haptics** | — | ⏳ Not Yet | Not yet brought up |
+| **Front Camera / Fingerprint / Haptics** | 32MP Front (likely `OV32D`), etc. | ⏳ Not Yet | Front sensor lacks mainline V4L2 driver; fingerprint/haptics not yet brought up |
 | **IR Blaster** | — | ⏳ Not Yet | Does anyone really use a tablet as a TV remote? 😂 |
 
 ---
 
 ## 🗺️ TODO / Roadmap
 
-- [ ] **Internal Microphone Recording**: Wire up AudioReach VA Macro DMIC topology and ALSA UCM2 capture profile.
-- [ ] **Sensors (Auto-Rotation & Auto-Brightness)**: Bring up SSC accelerometer and ALS via `hexagonrpcd` + `iio-sensor-proxy`.
-- [ ] **USB-C Host / Gadget Quick Toggle**: Add a one-click desktop toggle between USB Host (docks/drives/peripherals) and USB-NCM debug networking.
+- [ ] **Internal Microphone Listening Check & Tuning**: WCD9395 `AMIC1 + AMIC3` (`<&swr2 1>`) + AudioReach `MultiMedia3 Capture` path is wired; awaiting human playback review via `krecorder` to tune `rootfs/ucm2/HiFi.conf` gain/array.
+- [x] **Rear 50MP Camera (`S5KJN1`)**: Brought up via SM8635 CAMSS/CAMCC + `libcamera` SoftISP + `kamoso` with default color `4080×3072 @ 30fps` photo/video capture.
+- [x] **ADSP SSC Sensors (Auto-Rotation / Auto-Brightness / Ambient KB Backlight)**: Brought up accelerometer, ALS, and magnetometer via patched `hexagonrpcd` + `iio-sensor-proxy`, with rotation lock, smooth auto-brightness (including blank/sleep recovery), and 4-step ambient keyboard backlight in the KDE panel widget.
+- [x] **S3 Deep Sleep Bluetooth Deadlock Fix**: Removed racy BT watchdog polling and serialized suspend/resume hooks with `flock`; verified instant `rtcwake -m mem` freeze/wake.
+- [ ] **Permanent USB Gadget CDC-ECM & Host Quick Toggle**: Verified `ecm.usb0` (~25 MB/s, zero errors) fixes macOS USB-NCM bulk-transfer stalls; next switch `dualboot/build_phase3_initramfs.sh` default to `ecm.usb0` and add a desktop Host/Gadget toggle.
 - [x] **Stock Charger Fast-Charging Benchmark**: Verified with the stock Xiaomi 67W charger under mainline Linux — negotiates standard USB-PD `9V / 1.5A` (`12.4W` peak USB input, `~5.8W` net battery charge with screen on, `27.6→29.0°C`; proprietary PPS charge pump is not active).
 - [x] **Higher-Wattage PD / Xiaomi 67W Fast Charging**: Automatically authenticates the stock dual-cell battery (`XM_PROP_AUTHENTIC` / `SLAVE_AUTHENTIC`) and sends `XM_PROP_VDM_CMD_VERIFIED (0x19)` + `pd_verified (0x1f)` over PMIC GLINK to unlock **Xiaomi 67W `PD_PPS` (`11V/6.1A` APDO + dual SMB1393 2:1 charge pumps, verified `+28.8W` net battery charge even at 80% SOC / `31.8°C`)**, with automatic `input_suspend` AICL unlock (`9V/3A`, `~24W`) for standard 3rd-party USB-PD chargers, battery thermal hysteresis protection, and inverted `BATT_CURR_NOW` sign fix for UPower / KDE.
 - [ ] **Deep Sleep Overnight Tuning**: Verified ~10% battery drain over 9h screen-off in power-save mode; continue cleaning up the UFS `hibern8 exit failed` resume warning.
 - [ ] **Tablet Mode (Folded Keyboard Disable)**: Hook up the rear hall sensor to disable keyboard/touchpad input when folded 360° behind the tablet.
 - [ ] **Long-Term Stability Testing**: Extended soak testing under load, repeated suspend/resume cycles, and external DisplayPort monitors.
-- [ ] **Cameras / Fingerprint**: Evaluate bring-up as mainline support matures.
+- [ ] **Front 32MP Camera / Fingerprint**: Evaluate front camera (likely `OV32D`) and fingerprint bring-up as mainline support matures.
 
 ---
 
@@ -100,7 +104,7 @@ For complete step-by-step instructions covering firmware extraction, mainline ke
 │   ├── images/                           # Documentation screenshots
 │   └── device-info/                      # Stock 6.1 kernel config reference
 ├── kernel/                               # Mainline Linux 7.4-rc3 kernel build & patch series
-│   ├── patches/                          # 28 mainline Linux 7.4-rc3 patches (0001..0028)
+│   ├── patches/                          # 31 mainline Linux 7.4-rc3 patches (0001..0031)
 │   ├── Dockerfile                        # Native ARM64 GCC build container
 │   ├── build_kernel.sh                   # Kernel build helper
 │   ├── build_initramfs.sh                # Minimal initramfs builder

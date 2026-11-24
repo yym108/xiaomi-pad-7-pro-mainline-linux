@@ -21,6 +21,7 @@ Usage:
 
 import glob
 import json
+import math
 import os
 import pwd
 import select
@@ -41,6 +42,12 @@ STATE_DIR = Path("/var/lib/muyu-power-mode")
 STATE_FILE = STATE_DIR / "mode"
 TOUCH_MODE_FILE = STATE_DIR / "touch_mode"
 TOUCH_AUTO_FILE = STATE_DIR / "touch_auto"
+ROTATION_LOCK_FILE = STATE_DIR / "rotation_lock"
+AUTO_BRIGHTNESS_FILE = STATE_DIR / "auto_brightness"
+AUTO_KBD_BACKLIGHT_FILE = STATE_DIR / "auto_kbd_backlight"
+
+KBD_BACKLIGHT_PATH = Path("/sys/class/leds/nanosic::kbd_backlight/brightness")
+KBD_BACKLIGHT_MAX_PATH = Path("/sys/class/leds/nanosic::kbd_backlight/max_brightness")
 
 CPU_BASE = Path("/sys/devices/system/cpu/cpufreq")
 GPU_BASE = Path("/sys/class/devfreq/3d00000.gpu")
@@ -88,6 +95,10 @@ lock = threading.Lock()
 current_mode = "balance"
 touch_mode = False
 touch_auto = True
+rotation_lock = False
+auto_brightness = False
+auto_kbd_backlight = False
+last_als_lux: float | None = None
 _last_touch_switch = 0.0
 _prev_cpu_total = 0
 _prev_cpu_idle = 0
@@ -182,6 +193,74 @@ def set_touch_auto_locked(enabled: bool) -> None:
     touch_auto = enabled
     save_text(TOUCH_AUTO_FILE, "1" if enabled else "0")
     print(f"[power-mode] touch_auto={enabled}", flush=True)
+
+
+def _find_wayland_display(uid: int) -> str | None:
+    runtime_dir = Path(f"/run/user/{uid}")
+    if not runtime_dir.is_dir():
+        return None
+    for sock in sorted(runtime_dir.glob("wayland-*")):
+        if not sock.name.endswith(".lock"):
+            return sock.name
+    return None
+
+
+def _run_kscreen_doctor(*args: str) -> bool:
+    try:
+        pw = pwd.getpwnam(DESKTOP_USER)
+        uid = pw.pw_uid
+        wdisp = _find_wayland_display(uid)
+        if not wdisp:
+            return False
+        arg_str = " ".join(args)
+        cmd = (
+            f'XDG_RUNTIME_DIR="/run/user/{uid}" '
+            f'WAYLAND_DISPLAY="{wdisp}" '
+            f'kscreen-doctor {arg_str} >/dev/null 2>&1'
+        )
+        r = subprocess.run(
+            ["su", "-s", "/bin/sh", DESKTOP_USER, "-c", cmd],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=4,
+        )
+        return r.returncode == 0
+    except Exception as e:
+        print(f"[power-mode] kscreen-doctor {args} failed: {e}", flush=True)
+        return False
+
+
+def apply_rotation_lock(locked: bool) -> None:
+    policy = "never" if locked else "always"
+    _run_kscreen_doctor(f"output.DSI-1.autoRotatePolicy.{policy}")
+
+
+def set_rotation_lock_locked(locked: bool) -> None:
+    global rotation_lock
+    rotation_lock = locked
+    save_text(ROTATION_LOCK_FILE, "1" if locked else "0")
+    threading.Thread(target=apply_rotation_lock, args=(locked,), daemon=True).start()
+    print(f"[power-mode] rotation_lock={locked}", flush=True)
+
+
+def apply_auto_brightness(enabled: bool) -> None:
+    # Always keep KWin's built-in autoBrightness disabled so it does not fight our ALS loop
+    _run_kscreen_doctor("output.DSI-1.autoBrightness.disable")
+
+
+def set_auto_brightness_locked(enabled: bool) -> None:
+    global auto_brightness
+    auto_brightness = enabled
+    save_text(AUTO_BRIGHTNESS_FILE, "1" if enabled else "0")
+    threading.Thread(target=apply_auto_brightness, args=(enabled,), daemon=True).start()
+    print(f"[power-mode] auto_brightness={enabled}", flush=True)
+
+
+def set_auto_kbd_backlight_locked(enabled: bool) -> None:
+    global auto_kbd_backlight
+    auto_kbd_backlight = enabled
+    save_text(AUTO_KBD_BACKLIGHT_FILE, "1" if enabled else "0")
+    print(f"[power-mode] auto_kbd_backlight={enabled}", flush=True)
 
 
 def apply_mode_locked(mode: str) -> None:
@@ -297,6 +376,10 @@ def get_status_locked() -> dict:
         "mem_total_gb": mem_total_gb,
         "touch_mode": touch_mode,
         "touch_auto": touch_auto,
+        "rotation_lock": rotation_lock,
+        "auto_brightness": auto_brightness,
+        "auto_kbd_backlight": auto_kbd_backlight,
+        "als_lux": round(last_als_lux, 1) if last_als_lux is not None else None,
     }
 
 
@@ -456,6 +539,48 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(get_status_locked())
             return
 
+        if p.path == "/rotation_lock":
+            with lock:
+                if v in ("on", "1", "true"):
+                    set_rotation_lock_locked(True)
+                elif v in ("off", "0", "false"):
+                    set_rotation_lock_locked(False)
+                elif v == "toggle":
+                    set_rotation_lock_locked(not rotation_lock)
+                else:
+                    self._send_json({"error": "invalid value"}, 400)
+                    return
+                self._send_json(get_status_locked())
+            return
+
+        if p.path == "/auto_brightness":
+            with lock:
+                if v in ("on", "1", "true"):
+                    set_auto_brightness_locked(True)
+                elif v in ("off", "0", "false"):
+                    set_auto_brightness_locked(False)
+                elif v == "toggle":
+                    set_auto_brightness_locked(not auto_brightness)
+                else:
+                    self._send_json({"error": "invalid value"}, 400)
+                    return
+                self._send_json(get_status_locked())
+            return
+
+        if p.path == "/auto_kbd_backlight":
+            with lock:
+                if v in ("on", "1", "true"):
+                    set_auto_kbd_backlight_locked(True)
+                elif v in ("off", "0", "false"):
+                    set_auto_kbd_backlight_locked(False)
+                elif v == "toggle":
+                    set_auto_kbd_backlight_locked(not auto_kbd_backlight)
+                else:
+                    self._send_json({"error": "invalid value"}, 400)
+                    return
+                self._send_json(get_status_locked())
+            return
+
         self._send_json({"error": "not found"}, 404)
 
     def do_POST(self):
@@ -473,9 +598,15 @@ def cli_main(argv: list[str]) -> int:
             url = f"http://{LISTEN_HOST}:{LISTEN_PORT}/touch?v={argv[1]}"
         elif arg == "touch-auto" and len(argv) >= 2:
             url = f"http://{LISTEN_HOST}:{LISTEN_PORT}/touch_auto?v={argv[1]}"
+        elif arg == "rotation-lock" and len(argv) >= 2:
+            url = f"http://{LISTEN_HOST}:{LISTEN_PORT}/rotation_lock?v={argv[1]}"
+        elif arg == "auto-brightness" and len(argv) >= 2:
+            url = f"http://{LISTEN_HOST}:{LISTEN_PORT}/auto_brightness?v={argv[1]}"
+        elif arg == "kbd-auto" and len(argv) >= 2:
+            url = f"http://{LISTEN_HOST}:{LISTEN_PORT}/auto_kbd_backlight?v={argv[1]}"
         else:
             print(
-                "Usage: muyu-power [save|balance|perf|cycle|status | touch on|off|toggle | touch-auto on|off|toggle]",
+                "Usage: muyu-power [save|balance|perf|cycle|status | touch|touch-auto|rotation-lock|auto-brightness|kbd-auto on|off|toggle]",
                 file=sys.stderr,
             )
             return 2
@@ -484,6 +615,9 @@ def cli_main(argv: list[str]) -> int:
         print(
             f"mode={d['mode']} ({d['label']}) "
             f"touch={'on' if d['touch_mode'] else 'off'} (auto={'on' if d['touch_auto'] else 'off'}) "
+            f"rot_lock={'on' if d['rotation_lock'] else 'off'} "
+            f"auto_bri={'on' if d['auto_brightness'] else 'off'} "
+            f"kbd_auto={'on' if d['auto_kbd_backlight'] else 'off'} "
             f"pwr={d['bat_watts']}W cpu={d['cpu_pct']}% soc={d['cpu_temp_c']}C"
         )
         return 0
@@ -681,6 +815,326 @@ def charging_manager_loop() -> None:
         time.sleep(3.0)
 
 
+def _lux_to_kbd_brightness(lux: float, current_level: int | None) -> int:
+    """Map ambient light (lux) to nanosic::kbd_backlight (0..100) with hysteresis."""
+    # 4 tiers: bright (>120 lux) -> 0, indoor (55..120) -> 25, dim (18..55) -> 55, dark (<18) -> 85
+    if current_level is None:
+        if lux >= 120.0:
+            return 0
+        if lux >= 55.0:
+            return 25
+        if lux >= 18.0:
+            return 55
+        return 85
+
+    if current_level == 0:
+        if lux < 95.0:
+            return _lux_to_kbd_brightness(lux, None)
+        return 0
+    if current_level == 25:
+        if lux >= 135.0:
+            return 0
+        if lux < 40.0:
+            return _lux_to_kbd_brightness(lux, None)
+        return 25
+    if current_level == 55:
+        if lux >= 70.0:
+            return _lux_to_kbd_brightness(lux, None)
+        if lux < 12.0:
+            return 85
+        return 55
+    # current_level == 85
+    if lux >= 26.0:
+        return _lux_to_kbd_brightness(lux, None)
+    return 85
+
+
+def _set_kbd_backlight_synced(val: int) -> bool:
+    """Set keyboard backlight via PowerDevil (silent, updates KDE slider) with UPower/sysfs fallback."""
+    try:
+        pw = pwd.getpwnam(DESKTOP_USER)
+        uid = pw.pw_uid
+        bus = f"/run/user/{uid}/bus"
+        if os.path.exists(bus):
+            cmd = (
+                f'XDG_RUNTIME_DIR="/run/user/{uid}" '
+                f'DBUS_SESSION_BUS_ADDRESS="unix:path={bus}" '
+                f'qdbus6 org.kde.Solid.PowerManagement '
+                f'/org/kde/Solid/PowerManagement/Actions/KeyboardBrightnessControl '
+                f'org.kde.Solid.PowerManagement.Actions.KeyboardBrightnessControl.setKeyboardBrightnessSilent {val} '
+                f'>/dev/null 2>&1'
+            )
+            r = subprocess.run(
+                ["su", "-s", "/bin/sh", DESKTOP_USER, "-c", cmd],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=3,
+            )
+            if r.returncode == 0:
+                return True
+    except Exception:
+        pass
+
+    try:
+        r = subprocess.run(
+            [
+                "gdbus", "call", "--system",
+                "--dest", "org.freedesktop.UPower",
+                "--object-path", "/org/freedesktop/UPower/KbdBacklight",
+                "--method", "org.freedesktop.UPower.KbdBacklight.SetBrightness",
+                str(val),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+        )
+        if r.returncode == 0:
+            return True
+    except Exception:
+        pass
+
+    return _write_sysfs(KBD_BACKLIGHT_PATH, str(val))
+
+
+def _set_screen_brightness_synced(val_10k: int) -> bool:
+    """Set screen brightness (0..10000) via PowerDevil setBrightnessSilent so KDE slider stays in sync."""
+    val_10k = max(500, min(10000, int(val_10k)))
+    try:
+        pw = pwd.getpwnam(DESKTOP_USER)
+        uid = pw.pw_uid
+        bus = f"/run/user/{uid}/bus"
+        if os.path.exists(bus):
+            cmd = (
+                f'XDG_RUNTIME_DIR="/run/user/{uid}" '
+                f'DBUS_SESSION_BUS_ADDRESS="unix:path={bus}" '
+                f'qdbus6 org.kde.Solid.PowerManagement '
+                f'/org/kde/Solid/PowerManagement/Actions/BrightnessControl '
+                f'org.kde.Solid.PowerManagement.Actions.BrightnessControl.setBrightnessSilent {val_10k} '
+                f'>/dev/null 2>&1'
+            )
+            r = subprocess.run(
+                ["su", "-s", "/bin/sh", DESKTOP_USER, "-c", cmd],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=3,
+            )
+            if r.returncode == 0:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _get_screen_brightness_10k() -> int | None:
+    try:
+        cur = read_int(Path("/sys/class/backlight/ktz8866-backlight/brightness"), -1)
+        mx = read_int(Path("/sys/class/backlight/ktz8866-backlight/max_brightness"), 2047)
+        if cur >= 0 and mx > 0:
+            return int(round(cur * 10000.0 / mx))
+    except Exception:
+        pass
+    return None
+
+
+def _lux_to_screen_brightness_10k(lux: float) -> int:
+    """Map ambient light (lux) to PowerDevil screen brightness (0..10000) on a natural log curve."""
+    pct = 10.0 + 27.0 * math.log10(max(0.0, lux) + 1.0)
+    pct = max(10.0, min(100.0, pct))
+    return int(round(pct * 100.0))
+
+
+def als_kbd_backlight_loop() -> None:
+    """Auto-adjust screen brightness & keyboard backlight from iio-sensor-proxy ALS."""
+    global last_als_lux
+    proc: subprocess.Popen | None = None
+    last_kbd_level: int | None = None
+    last_scr_target: int | None = None
+    last_scr_applied: int | None = None
+    manual_pause_until = 0.0
+    screen_was_off = False
+    last_wall = time.time()
+    last_mono = time.monotonic()
+
+    def reset_screen_state() -> None:
+        nonlocal last_scr_target, last_scr_applied, manual_pause_until
+        last_scr_target = None
+        last_scr_applied = None
+        manual_pause_until = 0.0
+
+    def apply_screen_for_lux(lux_val: float, force: bool = False) -> None:
+        nonlocal last_scr_target, last_scr_applied, manual_pause_until, screen_was_off
+        cur_bri = _get_screen_brightness_10k()
+        if cur_bri is not None and cur_bri <= 0:
+            screen_was_off = True
+            reset_screen_state()
+            return
+
+        now = time.monotonic()
+        if screen_was_off:
+            screen_was_off = False
+            reset_screen_state()
+            force = True
+
+        # Detect manual slider drag only when screen was already on and steady
+        if (
+            not force
+            and last_scr_applied is not None
+            and cur_bri is not None
+            and abs(cur_bri - last_scr_applied) >= 700
+        ):
+            manual_pause_until = now + 12.0
+            last_scr_applied = cur_bri
+            last_scr_target = cur_bri
+            return
+
+        if not force and now < manual_pause_until:
+            return
+
+        target = _lux_to_screen_brightness_10k(lux_val)
+        if force or last_scr_target is None or abs(target - last_scr_target) >= 350:
+            start_bri = cur_bri if cur_bri is not None else target
+            steps = 3 if abs(target - start_bri) >= 1200 else 1
+            ok = False
+            for s in range(1, steps + 1):
+                step_val = int(round(start_bri + (target - start_bri) * (s / steps)))
+                if _set_screen_brightness_synced(step_val):
+                    ok = True
+                if s < steps:
+                    time.sleep(0.08)
+            if ok:
+                actual = _get_screen_brightness_10k()
+                last_scr_applied = actual if (actual is not None and actual > 0) else target
+                last_scr_target = target
+                print(
+                    f"[als-scr] lux={lux_val:.1f} -> screen_brightness={target/100:.0f}%",
+                    flush=True,
+                )
+
+    while True:
+        now_wall = time.time()
+        now_mono = time.monotonic()
+        # Detect system suspend/resume (wall clock jumped ahead of monotonic clock)
+        if (now_wall - last_wall) - (now_mono - last_mono) > 5.0:
+            reset_screen_state()
+            last_kbd_level = None
+            screen_was_off = True
+        last_wall = now_wall
+        last_mono = now_mono
+
+        with lock:
+            en_scr = auto_brightness
+            en_kbd = auto_kbd_backlight
+
+        if not en_scr and not en_kbd:
+            if proc is not None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=2)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                proc = None
+            last_kbd_level = None
+            reset_screen_state()
+            time.sleep(0.5)
+            continue
+
+        if not en_kbd:
+            last_kbd_level = None
+        if not en_scr:
+            reset_screen_state()
+
+        if proc is None or proc.poll() is not None:
+            try:
+                proc = subprocess.Popen(
+                    ["monitor-sensor", "--light"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    bufsize=1,
+                )
+            except Exception as e:
+                print(f"[als] failed to start monitor-sensor: {e}", flush=True)
+                time.sleep(3.0)
+                continue
+
+        try:
+            rlist, _, _ = select.select([proc.stdout], [], [], 1.0)
+            if not rlist:
+                # Even without new ALS events, catch screen-off / screen-on transitions
+                if en_scr:
+                    cur_bri = _get_screen_brightness_10k()
+                    if cur_bri is not None and cur_bri <= 0:
+                        if not screen_was_off:
+                            screen_was_off = True
+                            reset_screen_state()
+                    elif screen_was_off and last_als_lux is not None:
+                        apply_screen_for_lux(last_als_lux, force=True)
+                continue
+
+            line = proc.stdout.readline()
+            if not line:
+                proc = None
+                time.sleep(1.0)
+                continue
+            lux_val: float | None = None
+            if "Light changed:" in line:
+                lux_val = float(line.split("Light changed:", 1)[1].strip().split()[0])
+            elif "Has ambient light sensor (value:" in line:
+                raw = line.split("value:", 1)[1].split(",", 1)[0].strip()
+                v = float(raw)
+                if v > 0.0:
+                    lux_val = v
+            if lux_val is None:
+                continue
+
+            with lock:
+                last_als_lux = lux_val
+                en_scr = auto_brightness
+                en_kbd = auto_kbd_backlight
+
+            # 1. Screen auto-brightness (via PowerDevil setBrightnessSilent)
+            if en_scr:
+                apply_screen_for_lux(lux_val, force=False)
+
+            # 2. Keyboard auto-backlight (via PowerDevil setKeyboardBrightnessSilent)
+            if en_kbd and KBD_BACKLIGHT_PATH.exists():
+                target = _lux_to_kbd_brightness(lux_val, last_kbd_level)
+                if target != last_kbd_level:
+                    max_b = read_int(KBD_BACKLIGHT_MAX_PATH, 100)
+                    scaled = max(0, min(max_b, int(round(target * max_b / 100.0))))
+                    if _set_kbd_backlight_synced(scaled):
+                        print(
+                            f"[als-kbd] lux={lux_val:.1f} -> kbd_backlight={scaled}/{max_b}",
+                            flush=True,
+                        )
+                        last_kbd_level = target
+        except Exception as e:
+            print(f"[als] loop error: {e}", flush=True)
+            time.sleep(1.0)
+
+
+def desktop_session_sync_loop() -> None:
+    """Wait for Wayland session after boot and apply persisted rotation_lock & auto_brightness."""
+    for _ in range(60):
+        try:
+            pw = pwd.getpwnam(DESKTOP_USER)
+            if _find_wayland_display(pw.pw_uid):
+                time.sleep(2.0)
+                with lock:
+                    rl = rotation_lock
+                    ab = auto_brightness
+                apply_rotation_lock(rl)
+                apply_auto_brightness(ab)
+                print(f"[power-mode] synced display state on session ready: rot_lock={rl}, auto_bri={ab}", flush=True)
+                return
+        except Exception:
+            pass
+        time.sleep(1.0)
+
+
 def main() -> None:
     if len(sys.argv) > 1:
         sys.exit(cli_main(sys.argv[1:]))
@@ -689,10 +1143,16 @@ def main() -> None:
         apply_mode_locked(load_saved_mode())
         set_touch_auto_locked(load_bool(TOUCH_AUTO_FILE, True))
         set_touch_mode_locked(load_bool(TOUCH_MODE_FILE, False), source="boot")
+        set_rotation_lock_locked(load_bool(ROTATION_LOCK_FILE, False))
+        set_auto_brightness_locked(load_bool(AUTO_BRIGHTNESS_FILE, False))
+        set_auto_kbd_backlight_locked(load_bool(AUTO_KBD_BACKLIGHT_FILE, False))
 
     threading.Thread(target=input_monitor_loop, daemon=True).start()
-    threading.Thread(target=bt_watchdog_loop, daemon=True).start()
+    # Note: WCN7850 BT sleep/resume is exclusively owned by /usr/lib/systemd/system-sleep/muyu-bt-resume.
+    # Running a concurrent bt_watchdog_loop races with pre-suspend unbind and can deadlock hci_unregister_dev.
     threading.Thread(target=charging_manager_loop, daemon=True).start()
+    threading.Thread(target=als_kbd_backlight_loop, daemon=True).start()
+    threading.Thread(target=desktop_session_sync_loop, daemon=True).start()
     print(f"[power-mode] listening on http://{LISTEN_HOST}:{LISTEN_PORT}", flush=True)
     HTTPServer((LISTEN_HOST, LISTEN_PORT), Handler).serve_forever()
 

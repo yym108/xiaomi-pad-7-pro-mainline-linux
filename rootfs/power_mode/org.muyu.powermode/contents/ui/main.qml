@@ -18,6 +18,9 @@ PlasmoidItem {
     property real memTotalGb: 0.0
     property bool touchMode: false
     property bool touchAuto: true
+    property bool rotationLock: false
+    property bool autoBrightness: false
+    property bool autoKbdBacklight: false
     property bool openedByTouch: false
     property bool mouseHovered: false
     property bool online: false
@@ -42,6 +45,9 @@ PlasmoidItem {
                         root.memTotalGb = d.mem_total_gb || 0.0;
                         root.touchMode = !!d.touch_mode;
                         root.touchAuto = !!d.touch_auto;
+                        root.rotationLock = !!d.rotation_lock;
+                        root.autoBrightness = !!d.auto_brightness;
+                        root.autoKbdBacklight = !!d.auto_kbd_backlight;
                         root.online = true;
                     } catch (e) {}
                 } else {
@@ -67,6 +73,9 @@ PlasmoidItem {
     function setMode(m) { sendApi("/mode?v=" + m); }
     function setTouchMode(on) { sendApi("/touch?v=" + (on ? "on" : "off")); }
     function setTouchAuto(on) { sendApi("/touch_auto?v=" + (on ? "on" : "off")); }
+    function setRotationLock(on) { sendApi("/rotation_lock?v=" + (on ? "on" : "off")); }
+    function setAutoBrightness(on) { sendApi("/auto_brightness?v=" + (on ? "on" : "off")); }
+    function setAutoKbdBacklight(on) { sendApi("/auto_kbd_backlight?v=" + (on ? "on" : "off")); }
 
     function modeIcon(m) {
         if (m === "save") return "battery-profile-powersave";
@@ -148,8 +157,8 @@ PlasmoidItem {
     }
 
     fullRepresentation: Item {
-        Layout.minimumWidth: Kirigami.Units.gridUnit * (root.largeUi ? 22 : 17)
-        Layout.minimumHeight: Kirigami.Units.gridUnit * (root.largeUi ? 21 : 16)
+        Layout.minimumWidth: Kirigami.Units.gridUnit * (root.largeUi ? 23 : 18)
+        Layout.minimumHeight: Kirigami.Units.gridUnit * (root.largeUi ? 30 : 23)
         Layout.preferredWidth: Layout.minimumWidth
         Layout.preferredHeight: Layout.minimumHeight
 
@@ -265,6 +274,46 @@ PlasmoidItem {
                 PlasmaComponents.Switch {
                     checked: root.touchAuto
                     onToggled: root.setTouchAuto(checked)
+                }
+            }
+
+            Kirigami.Separator {
+                Layout.fillWidth: true
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                PlasmaComponents.Label {
+                    text: "🔒 锁定屏幕朝向"
+                    Layout.fillWidth: true
+                }
+                PlasmaComponents.Switch {
+                    checked: root.rotationLock
+                    onToggled: root.setRotationLock(checked)
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                PlasmaComponents.Label {
+                    text: "☀️ 屏幕亮度自动调节"
+                    Layout.fillWidth: true
+                }
+                PlasmaComponents.Switch {
+                    checked: root.autoBrightness
+                    onToggled: root.setAutoBrightness(checked)
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                PlasmaComponents.Label {
+                    text: "⌨️ 键盘背光随环境调节"
+                    Layout.fillWidth: true
+                }
+                PlasmaComponents.Switch {
+                    checked: root.autoKbdBacklight
+                    onToggled: root.setAutoKbdBacklight(checked)
                 }
             }
         }
