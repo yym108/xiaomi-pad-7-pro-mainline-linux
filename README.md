@@ -23,7 +23,7 @@
 
 ## ✨ 项目亮点
 
-- **纯净主线 Linux `7.4.0-rc3`**：并非基于 Android 下游内核魔改，而是直接在官方主线 Linux 上整理出 **31 个清晰独立的补丁**（[`kernel/patches/0001`–`0031`](kernel/patches/)），便于后续跟进新版本内核。
+- **纯净主线 Linux `7.4.0-rc3`**：并非基于 Android 下游内核魔改，而是直接在官方主线 Linux 上整理出 **32 个清晰独立的补丁**（[`kernel/patches/0001`–`0032`](kernel/patches/)），便于后续跟进新版本内核。
 - **不破坏原厂系统的无损双系统 + 一键双向切换**：
   - 小米平板 7 Pro 硬件自带 A/B 两套独立的启动分区（原本用于系统无缝 OTA 更新）。本方案把原厂 **HyperOS 完整留在主槽位（Slot A）不动**，把 **Arch Linux ARM + KDE Plasma 6** 装在副槽位（Slot B）以及独立的 `80 GiB` 分区里，两套系统互不干扰，随时有原厂系统兜底。
   - **HyperOS → Linux**：下拉控制中心点击快捷磁贴「切换 Arch Linux」，直接重启冷启动进入桌面 Linux。
@@ -45,7 +45,7 @@
 
 | 子系统 | 硬件 / 芯片 | 状态 | 说明 |
 | --- | --- | :---: | --- |
-| **SoC / 时钟 / 总线** | Qualcomm SM8635 (`cliffs`) | ✅ 正常 | GCC、RPMh、TLMM、IOMMU、UFS |
+| **SoC / 时钟 / 总线** | Qualcomm SM8635 (`cliffs`) | ✅ 正常 | GCC、RPMh、TLMM、IOMMU、UFS、CPU 三簇被动温控降频（`75/78°C` `cpufreq` cooling maps）与 `zstd` ZRAM |
 | **屏幕显示** | 3200×2136 (3:2) @ 120Hz 双 DSI DSC 1.1 | ✅ 正常 | 4nm PHY 同步、双 KTZ8866 背光 |
 | **GPU 图形加速** | Adreno 735 (`gen71100`) | ✅ 正常 | Mesa Freedreno + Vulkan（`vulkan-freedreno`），KDE 6 Wayland 流畅渲染 |
 | **触摸屏** | Novatek NT36532 (SPI TDDI) | ✅ 正常 | 多点触控，息屏/休眠唤醒正常 |
@@ -59,7 +59,7 @@
 | **ADSP 传感器** | `lsm6dso` 加速度 / `stk3bcx` 光感 / `qmc6308` 磁力计 | ✅ 正常 | 补丁版 `hexagonrpcd` + `iio-sensor-proxy`；状态栏小组件集成旋转锁、平滑自动亮度与环境键盘背光 |
 | **USB-C / 视频输出** | QMP PHY + WCD9395 USBSS | ✅ 正常 | USB3、USB 调试网卡（`172.16.42.1`）、`ttyGS0` 串口、DP0 AltMode |
 | **视频硬解 / 编码** | Qualcomm Iris VPU 3.3 (2-pipe) | ✅ 正常 | V4L2 M2M + `qcom-va-driver` VA-API 零拷贝（4K60 H.264/HEVC 8&10-bit/VP9/AV1 ~135–198 FPS，1080p60 硬编 ~345 FPS） |
-| **电池 / 供电** | `qcom-battmgr` / PMIC GLINK | ✅ 正常 | 电量计、USB/无线电源状态、已修充电电流符号（KDE 充电图标正常）；自动解锁**小米原厂 67W `PD_PPS` + 双电荷泵快充**（`apdo_max=67W`、`icl=6.10A`，80% 高电量末端仍实测净充 `+28.8W` / `31.8°C`，非小米头自动回落 24W 标准 PD，含电池温控保护） |
+| **电池 / 供电** | `qcom-battmgr` / PMIC GLINK | ✅ 正常 | 电量计、USB/无线电源状态、已修充电电流符号（KDE 充电图标正常）；自动解锁**小米原厂 67W `PD_PPS` + 双电荷泵快充**（`apdo_max=67W`、`icl=6.10A`，亮屏实测 **28%→100% 耗时 58 分钟** / `Full` 62.9 分钟，峰值电池净充 **`+33.46W`**，全程电池最高仅 **`37.2°C`**，非小米头自动回落 24W 标准 PD） |
 | **前置摄像头 / 指纹 / 马达** | 32MP 前摄（疑似 `OV32D`）等 | ⏳ 未适配 | 前摄暂缺主线 V4L2 驱动，指纹/马达暂未点亮 |
 | **红外遥控** | — | ⏳ 未适配 | 不是真有人用平板红外遥控吗 😂 |
 
@@ -73,7 +73,8 @@
 - [x] **S3 深睡蓝牙唤醒卡顿修复**：已移除竞态轮询并加 `flock` 串行化，实测 `rtcwake -m mem` 瞬时冻结/唤醒零卡顿。
 - [ ] **USB Gadget 永久切 CDC-ECM & Host 一键切换**：已验证 `ecm.usb0`（~25 MB/s 零错包）彻底解决 macOS USB-NCM 大流量卡死，后续将 `dualboot/build_phase3_initramfs.sh` 默认切换为 `ecm.usb0` 并提供桌面 Host/Gadget 一键切换。
 - [x] **原厂充电器充电功率测试**：已实测小米原厂 67W 充电器在主线 Linux 下握手标准 USB-PD `9V / 1.5A`（USB 输入峰值 `12.4W`，亮屏电池净充 `~5.8W`，电池温升温和 `27.6→29.0°C`；未启用小米私有 PPS 电荷泵快充）。
-- [x] **突破 12W PD 限流 / 小米 67W 满血快充适配**：通过 PMIC GLINK 自动下发原厂双电芯认证（`XM_PROP_AUTHENTIC` / `SLAVE_AUTHENTIC`）+ 小米 UVDM 认证（`XM_PROP_VDM_CMD_VERIFIED (0x19)` + `pd_verified (0x1f)`），已成功在主线 Linux 下点亮**小米原厂 67W `PD_PPS`（`11V/6.1A` APDO + 双 SMB1393 2:1 电荷泵均流，80% 高电量末端仍实测净充 `+28.8W` / `31.8°C`）**；非小米普通 PD 头自动通过 `input_suspend` 脉冲解锁满血 `9V/3A`（`~24W`）；同时修复了 `BATT_CURR_NOW` 符号反置导致的 KDE 电池充电图标异常。
+- [x] **突破 12W PD 限流 / 小米 67W 满血快充适配**：通过 PMIC GLINK 自动下发原厂双电芯认证（`XM_PROP_AUTHENTIC` / `SLAVE_AUTHENTIC`）+ 小米 UVDM 认证（`XM_PROP_VDM_CMD_VERIFIED (0x19)` + `pd_verified (0x1f)`），已成功在主线 Linux 下点亮**小米原厂 67W `PD_PPS`（`11V/6.1A` APDO + 双 SMB1393 2:1 电荷泵均流）**；亮屏开机实测 **28% → 100% 用时 58 分钟**（`Full` 停充 `62.9 min`，28%→80% 仅 `39.2 min`），峰值电池净充 **`+33.46W`**（`8.22A @ 4.07V`），40%–80% 稳态均值 `~24W` / 峰值 `~29W`，全程电池最高仅 **`37.2°C`**；非小米普通 PD 头自动通过 `input_suspend` 脉冲解锁满血 `9V/3A`（`~24W`）；同时修复了 `BATT_CURR_NOW` 符号反置导致的 KDE 电池充电图标异常。
+- [x] **高负载温控与内存防 OOM 优化**：在 DTS 中为 `cpu0`–`cpu7` 补齐 `#cooling-cells = <2>` 及三簇被动温控降频策略（`75°C / 78°C / 78°C` 绑定 `cpufreq-cpu0/3/7`），内核内置 `CONFIG_ZRAM` + `zstd` 压缩后端，用户态默认配置 6 GiB ZRAM 防止编译/全量单测 OOM。
 - [ ] **深度休眠（`deep`）续航调优**：已实测省电模式息屏 9 小时掉电约 10%，后续继续排查并消除 UFS `hibern8 exit failed` 告警。
 - [ ] **平板模式（键盘 360° 反折防误触）**：接入背部霍尔传感器在反折状态下自动禁用键鼠输入。
 - [ ] **长时间稳定性验证**：覆盖高负载、频繁休眠唤醒、外接 DP 显示器等场景的持续稳定性测试。
@@ -104,7 +105,7 @@
 │   ├── images/                           # 文档展示截图
 │   └── device-info/                      # 原厂 6.1 内核配置参考
 ├── kernel/                               # 主线 Linux 7.4-rc3 内核构建与补丁集
-│   ├── patches/                          # 31 个主线 Linux 7.4-rc3 补丁 (0001..0031)
+│   ├── patches/                          # 32 个主线 Linux 7.4-rc3 补丁 (0001..0032)
 │   ├── Dockerfile                        # 原生 ARM64 GCC 内核编译容器
 │   ├── build_kernel.sh                   # 内核构建脚本
 │   ├── build_initramfs.sh                # 最小 initramfs 构建脚本

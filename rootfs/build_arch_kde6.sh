@@ -265,8 +265,48 @@ cp "$ROOT/usr/share/applications/switch-to-hyperos.desktop" "$ROOT/home/muyu/Des
 chmod +x "$ROOT/home/muyu/Desktop/switch-to-hyperos.desktop"
 chroot "$ROOT" chown -R muyu:muyu /home/muyu
 
+# 6 GiB ZRAM (zstd, pri=100) + memory tuning for heavy dev workloads (IDE / test suites)
+mkdir -p "$ROOT/usr/local/sbin" "$ROOT/etc/sysctl.d"
+cat > "$ROOT/usr/local/sbin/muyu-zram-init.sh" <<'ZRAMSH'
+#!/bin/sh
+set -e
+[ -b /dev/zram0 ] || modprobe zram 2>/dev/null || true
+[ -b /dev/zram0 ] || exit 0
+if ! grep -q '^/dev/zram0 ' /proc/swaps; then
+    echo 1 > /sys/block/zram0/reset 2>/dev/null || true
+    echo zstd > /sys/block/zram0/comp_algorithm
+    echo 6G > /sys/block/zram0/disksize
+    mkswap /dev/zram0
+    swapon -p 100 /dev/zram0
+fi
+ZRAMSH
+chmod +x "$ROOT/usr/local/sbin/muyu-zram-init.sh"
+
+cat > "$ROOT/etc/systemd/system/muyu-zram.service" <<'ZRAMSVC'
+[Unit]
+Description=Configure 6GiB zstd ZRAM swap
+DefaultDependencies=no
+After=local-fs.target
+Before=swap.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/muyu-zram-init.sh
+
+[Install]
+WantedBy=swap.target
+ZRAMSVC
+
+cat > "$ROOT/etc/sysctl.d/99-muyu-memory.conf" <<'SYSCTL'
+vm.swappiness=100
+vm.page-cluster=0
+vm.watermark_boost_factor=0
+vm.vfs_cache_pressure=50
+SYSCTL
+
 # Enable systemd services
-chroot "$ROOT" systemctl enable NetworkManager bluetooth sshd sddm muyu-audio muyu-focus-pen serial-getty@ttyGS0
+chroot "$ROOT" systemctl enable NetworkManager bluetooth sshd sddm muyu-audio muyu-focus-pen muyu-zram serial-getty@ttyGS0
 
 # Clean pacman cache to keep transfer fast
 rm -rf "$ROOT/var/cache/pacman/pkg/"*

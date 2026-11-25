@@ -23,7 +23,7 @@
 
 ## ✨ Highlights
 
-- **Pure Mainline Linux `7.4.0-rc3`**: Built directly on upstream Linux with **31 self-contained patches** ([`kernel/patches/0001`–`0031`](kernel/patches/)) rather than a downstream Android kernel fork.
+- **Pure Mainline Linux `7.4.0-rc3`**: Built directly on upstream Linux with **32 self-contained patches** ([`kernel/patches/0001`–`0032`](kernel/patches/)) rather than a downstream Android kernel fork.
 - **Non-Destructive A/B Dual-Boot + One-Tap Switching**:
   - Modern Android tablets ship with two independent A/B boot slots (originally designed for seamless OTA updates). This setup leaves **stock HyperOS 100% untouched on Slot A** as a permanent fallback, while running **Arch Linux ARM + KDE Plasma 6** from **Slot B** and a dedicated `80 GiB` partition.
   - **HyperOS → Linux**: Tap the Quick Settings Tile (**切换 Arch Linux**) to cold-boot straight into desktop Linux.
@@ -45,7 +45,7 @@
 
 | Subsystem | Hardware / Chip | Status | Notes |
 | --- | --- | :---: | --- |
-| **SoC / Clocks / Bus** | Qualcomm SM8635 (`cliffs`) | ✅ Working | GCC, RPMh, TLMM, IOMMU, UFS |
+| **SoC / Clocks / Bus** | Qualcomm SM8635 (`cliffs`) | ✅ Working | GCC, RPMh, TLMM, IOMMU, UFS, 3-cluster CPU passive thermal throttling (`75/78°C` `cpufreq` cooling maps) & `zstd` ZRAM |
 | **Display** | 3200×2136 (3:2) @ 120Hz Dual-DSI DSC 1.1 | ✅ Working | 4nm PHY sync, dual KTZ8866 backlights |
 | **GPU** | Adreno 735 (`gen71100`) | ✅ Working | Mesa Freedreno + Vulkan (`vulkan-freedreno`), smooth KDE 6 Wayland |
 | **Touchscreen** | Novatek NT36532 (SPI TDDI) | ✅ Working | Multi-touch, normal blank/resume recovery |
@@ -59,7 +59,7 @@
 | **ADSP SSC Sensors** | `lsm6dso` Accel / `stk3bcx` ALS / `qmc6308` Compass | ✅ Working | Patched `hexagonrpcd` + `iio-sensor-proxy`; KDE panel widget adds rotation lock, smooth auto-brightness & ambient keyboard backlight |
 | **USB-C / DisplayPort** | QMP PHY + WCD9395 USBSS | ✅ Working | USB3, USB gadget networking (`172.16.42.1`), `ttyGS0` serial, DP0 AltMode |
 | **Video Decode/Encode** | Qualcomm Iris VPU 3.3 (2-pipe) | ✅ Working | V4L2 M2M + `qcom-va-driver` zero-copy VA-API (4K60 H.264/HEVC 8&10-bit/VP9/AV1 ~135–198 FPS, 1080p60 encode ~345 FPS) |
-| **Battery / Power** | `qcom-battmgr` / PMIC GLINK | ✅ Working | Fuel gauge, USB/wireless telemetry, fixed `current_now` sign (KDE charging icon works); auto-unlocks **Xiaomi 67W `PD_PPS` + dual 2:1 charge pumps** (`apdo_max=67W`, `icl=6.10A`, `+28.8W` net at 80% SOC / `31.8°C`), with 24W standard PD fallback and battery thermal guard |
+| **Battery / Power** | `qcom-battmgr` / PMIC GLINK | ✅ Working | Fuel gauge, USB/wireless telemetry, fixed `current_now` sign (KDE charging icon works); auto-unlocks **Xiaomi 67W `PD_PPS` + dual 2:1 charge pumps** (`apdo_max=67W`, `icl=6.10A`, screen-on benchmark **28%→100% in 58 min** / `Full` 62.9 min, **`+33.46W`** peak net, max battery temp **`37.2°C`**), with 24W standard PD fallback |
 | **Front Camera / Fingerprint / Haptics** | 32MP Front (likely `OV32D`), etc. | ⏳ Not Yet | Front sensor lacks mainline V4L2 driver; fingerprint/haptics not yet brought up |
 | **IR Blaster** | — | ⏳ Not Yet | Does anyone really use a tablet as a TV remote? 😂 |
 
@@ -73,7 +73,8 @@
 - [x] **S3 Deep Sleep Bluetooth Deadlock Fix**: Removed racy BT watchdog polling and serialized suspend/resume hooks with `flock`; verified instant `rtcwake -m mem` freeze/wake.
 - [ ] **Permanent USB Gadget CDC-ECM & Host Quick Toggle**: Verified `ecm.usb0` (~25 MB/s, zero errors) fixes macOS USB-NCM bulk-transfer stalls; next switch `dualboot/build_phase3_initramfs.sh` default to `ecm.usb0` and add a desktop Host/Gadget toggle.
 - [x] **Stock Charger Fast-Charging Benchmark**: Verified with the stock Xiaomi 67W charger under mainline Linux — negotiates standard USB-PD `9V / 1.5A` (`12.4W` peak USB input, `~5.8W` net battery charge with screen on, `27.6→29.0°C`; proprietary PPS charge pump is not active).
-- [x] **Higher-Wattage PD / Xiaomi 67W Fast Charging**: Automatically authenticates the stock dual-cell battery (`XM_PROP_AUTHENTIC` / `SLAVE_AUTHENTIC`) and sends `XM_PROP_VDM_CMD_VERIFIED (0x19)` + `pd_verified (0x1f)` over PMIC GLINK to unlock **Xiaomi 67W `PD_PPS` (`11V/6.1A` APDO + dual SMB1393 2:1 charge pumps, verified `+28.8W` net battery charge even at 80% SOC / `31.8°C`)**, with automatic `input_suspend` AICL unlock (`9V/3A`, `~24W`) for standard 3rd-party USB-PD chargers, battery thermal hysteresis protection, and inverted `BATT_CURR_NOW` sign fix for UPower / KDE.
+- [x] **Higher-Wattage PD / Xiaomi 67W Fast Charging**: Automatically authenticates the stock dual-cell battery (`XM_PROP_AUTHENTIC` / `SLAVE_AUTHENTIC`) and sends `XM_PROP_VDM_CMD_VERIFIED (0x19)` + `pd_verified (0x1f)` over PMIC GLINK to unlock **Xiaomi 67W `PD_PPS` (`11V/6.1A` APDO + dual SMB1393 2:1 charge pumps)** — full screen-on benchmark **28% → 100% in 58.0 min** (`Full` cutoff `62.9 min`, 28%→80% in `39.2 min`), **`+33.46W`** peak net battery charge (`8.22A @ 4.07V`), steady `~24W` avg / `~29W` peak across 40%–80%, and max battery temp **`37.2°C`**; automatic `input_suspend` AICL unlock (`9V/3A`, `~24W`) for standard 3rd-party USB-PD chargers, plus inverted `BATT_CURR_NOW` sign fix for UPower / KDE.
+- [x] **CPU Thermal Throttling & ZRAM OOM Protection**: Added `#cooling-cells = <2>` on `cpu0`–`cpu7` with passive thermal trips (`75°C / 78°C / 78°C`) bound to `cpufreq-cpu0/3/7`, built-in `CONFIG_ZRAM` + `zstd`, and 6 GiB ZRAM userspace setup to prevent OOM during heavy builds/test suites.
 - [ ] **Deep Sleep Overnight Tuning**: Verified ~10% battery drain over 9h screen-off in power-save mode; continue cleaning up the UFS `hibern8 exit failed` resume warning.
 - [ ] **Tablet Mode (Folded Keyboard Disable)**: Hook up the rear hall sensor to disable keyboard/touchpad input when folded 360° behind the tablet.
 - [ ] **Long-Term Stability Testing**: Extended soak testing under load, repeated suspend/resume cycles, and external DisplayPort monitors.
@@ -104,7 +105,7 @@ For complete step-by-step instructions covering firmware extraction, mainline ke
 │   ├── images/                           # Documentation screenshots
 │   └── device-info/                      # Stock 6.1 kernel config reference
 ├── kernel/                               # Mainline Linux 7.4-rc3 kernel build & patch series
-│   ├── patches/                          # 31 mainline Linux 7.4-rc3 patches (0001..0031)
+│   ├── patches/                          # 32 mainline Linux 7.4-rc3 patches (0001..0032)
 │   ├── Dockerfile                        # Native ARM64 GCC build container
 │   ├── build_kernel.sh                   # Kernel build helper
 │   ├── build_initramfs.sh                # Minimal initramfs builder
